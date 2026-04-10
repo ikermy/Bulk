@@ -1,0 +1,67 @@
+name: Integration Tests (Docker-in-Docker)
+
+on:
+  push:
+    branches: ["main", "master"]
+  pull_request:
+    branches: ["main", "master"]
+
+jobs:
+  integration-tests:
+    name: Integration tests (docker:dind)
+    runs-on: ubuntu-latest
+    services:
+      docker:
+        image: docker:20.10.24-dind
+        options: --privileged
+        env:
+          DOCKER_TLS_CERTDIR: ""
+        ports:
+          - 2375:2375
+    env:
+      DOCKER_HOST: tcp://localhost:2375
+      KAFKA_TEST_IMAGE: bitnami/kafka:3.5.1
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v4
+        with:
+          go-version: '1.25'
+
+      - name: Cache Go modules
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/go-build
+            ${{ github.workspace }}/pkg/mod
+          key: ${{ runner.os }}-go-${{ hashFiles('**/go.sum') }}
+          restore-keys: |
+            ${{ runner.os }}-go-
+
+      - name: Wait for Docker daemon
+        run: |
+          for i in {1..30}; do
+            docker version && break || sleep 1;
+          done
+
+      - name: Run integration tests
+        run: |
+          echo "DOCKER_HOST=$DOCKER_HOST"
+          go test ./... -tags=integration -v
+        env:
+          DOCKER_HOST: ${{ env.DOCKER_HOST }}
+
+      # collect kafka container logs for debugging on failure
+      - name: Dump Kafka container logs (always)
+        if: always()
+        run: |
+          echo "=== docker ps -a ==="; docker ps -a || true
+          echo "=== Kafka containers logs (by image) ==="
+          for cid in $(docker ps -a --filter ancestor=${{ env.KAFKA_TEST_IMAGE }} -q); do
+            echo "--- logs for $cid ---";
+            docker logs $cid || true;
+          done
+          echo "=== End logs ==="
+

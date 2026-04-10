@@ -1,0 +1,2725 @@
+openapi: 3.0.3
+info:
+  title: Barcode BFF API
+  version: 1.0.0
+  description: |
+    Актуальная OpenAPI-спецификация для HTTP API BFF.
+
+    BFF выступает оркестратором и не содержит доменной логики расчётов.
+    Все non-system endpoints могут дополнительно вернуть 503 при включённом
+    maintenance mode.
+servers:
+  - url: http://localhost:8080
+security:
+  - bearerAuth: []
+tags:
+  - name: System
+  - name: Billing
+  - name: Revisions
+  - name: Barcode
+  - name: Bulk
+  - name: Admin
+  - name: Internal
+paths:
+  /health:
+    get:
+      tags: [System]
+      summary: Health check
+      security: []
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [status]
+                properties:
+                  status:
+                    type: string
+                    example: ok
+
+  /ready:
+    get:
+      tags: [System]
+      summary: Readiness check — готовность принимать трафик (DB/Kafka checks)
+      security: []
+      responses:
+        '200':
+          description: Ready
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [status]
+                properties:
+                  status:
+                    type: string
+                    example: ready
+        '503':
+          description: Not ready (dependencies missing or unhealthy)
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [status]
+                properties:
+                  status:
+                    type: string
+                    example: unready
+                  details:
+                    type: object
+                    additionalProperties: true
+
+  /metrics:
+    get:
+      tags: [System]
+      summary: Prometheus metrics
+      security: []
+      responses:
+        '200':
+          description: Prometheus exposition format
+          content:
+            text/plain:
+              schema:
+                type: string
+
+  /api/v1/billing/quote:
+    get:
+      tags: [Billing]
+      summary: Проверка доступных средств
+      parameters:
+        - in: query
+          name: units
+          required: true
+          schema:
+            type: integer
+            minimum: 1
+        - in: query
+          name: revision
+          required: false
+          schema:
+            type: string
+          description: Если не указан, BFF использует ревизию по умолчанию `US_CA_08292017`.
+      responses:
+        '200':
+          description: Quote response
+          content:
+            application/json:
+              examples:
+                full:
+                  summary: Полный quote без shortfall
+                  value:
+                    canProcess: true
+                    partial: false
+                    requested: 5
+                    allowedTotal: 5
+                    unitPrice: 0.5
+                    bySource:
+                      subscription:
+                        units: 3
+                        remaining: 27
+                      credits:
+                        units: 2
+                        remaining: 18
+                      wallet:
+                        units: 0
+                        amount: 0
+                partial:
+                  summary: Частичный quote со shortfall (billing разрешил 60 из 120)
+                  value:
+                    canProcess: true
+                    partial: true
+                    requested: 120
+                    allowedTotal: 60
+                    unitPrice: 0.5
+                    bySource:
+                      subscription:
+                        units: 30
+                        remaining: 0
+                      credits:
+                        units: 20
+                        remaining: 0
+                      wallet:
+                        units: 10
+                        amount: 5
+                    shortfall:
+                      units: 60
+                      amountRequired: 30
+              schema:
+                $ref: '#/components/schemas/QuoteResponse'
+        '400':
+          $ref: '#/components/responses/ValidationError'
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
+        '402':
+          $ref: '#/components/responses/InsufficientFundsError'
+        '503':
+          $ref: '#/components/responses/ServiceError'
+
+  /api/v1/revisions:
+    get:
+      tags: [Revisions]
+      summary: Список доступных ревизий
+      responses:
+        '200':
+          description: Enabled revisions
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RevisionListResponse'
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
+
+  /api/v1/revisions/{revision}/schema:
+    get:
+      tags: [Revisions]
+      summary: Схема формы для ревизии
+      parameters:
+        - in: path
+          name: revision
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Revision schema
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RevisionSchema'
+        '400':
+          $ref: '#/components/responses/ValidationError'
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
+
+  /api/v1/barcode/generate:
+    post:
+      tags: [Barcode]
+      summary: Генерация баркодов
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            example:
+              revision: US_CA_08292017
+              barcodeType: pdf417
+              units: 2
+              confirmed: true
+              buildId: build-20260318-001
+              batchId: batch-42
+              fields:
+                firstName: JOHN
+                lastName: DOE
+                dateOfBirth: 1990-05-15
+                street: 123 Main St
+                city: Los Angeles
+                state: CA
+                zipCode: '90001'
+              generateSignature: true
+              signatureStyle: cursive
+            schema:
+              $ref: '#/components/schemas/GenerateRequest'
+      responses:
+        '200':
+          description: Успешная генерация или partial funds ответ
+          content:
+            application/json:
+              examples:
+                success:
+                  summary: Успешная генерация
+                  value:
+                    success: true
+                    buildId: build-20260318-001
+                    batchId: batch-42
+                    barcodes:
+                      - url: https://cdn.example.com/barcodes/pdf417_1.png
+                        format: pdf417
+                      - url: https://cdn.example.com/barcodes/pdf417_2.png
+                        format: pdf417
+                    computed:
+                      - DAQ
+                      - DAK
+                      - DAE
+                      - DBB
+                    skipped: []
+                    billing:
+                      totalCost: 1
+                      bySource:
+                        subscription:
+                          units: 1
+                          remaining: 29
+                        credits:
+                          units: 1
+                          remaining: 19
+                        wallet:
+                          units: 0
+                          amount: 0
+                      referralEligible: 0
+                partialFunds:
+                  summary: Partial funds, требуется подтверждение
+                  value:
+                    code: PARTIAL_FUNDS
+                    message: only 3 of 5 units available, set confirmed=true to proceed
+                    partial: true
+                    confirmed: false
+                duplicateRequest:
+                  summary: Повторный запрос с тем же X-Idempotency-Key
+                  value:
+                    code: DUPLICATE_REQUEST
+                    success: true
+                    buildId: build-20260318-001
+                    batchId: batch-42
+                    barcodes:
+                      - url: https://cdn.example.com/barcodes/pdf417_1.png
+                        format: pdf417
+                    computed:
+                      - DAQ
+                      - DAK
+                      - DAE
+                      - DBB
+                    skipped: []
+                    billing:
+                      totalCost: 0.5
+                      bySource:
+                        subscription:
+                          units: 1
+                          remaining: 29
+                        credits:
+                          units: 0
+                          remaining: 20
+                        wallet:
+                          units: 0
+                          amount: 0
+                      referralEligible: 0
+              schema:
+                oneOf:
+                  - $ref: '#/components/schemas/GenerateResponse'
+                  - $ref: '#/components/schemas/PartialFundsResponse'
+        '400':
+          $ref: '#/components/responses/ValidationError'
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
+        '402':
+          $ref: '#/components/responses/InsufficientFundsError'
+        '409':
+          $ref: '#/components/responses/RequestInFlightError'
+        '503':
+          $ref: '#/components/responses/ServiceError'
+
+  /api/v1/barcode/generate/pdf417:
+    post:
+      tags: [Barcode]
+      summary: Dedicated генерация PDF417
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/GeneratePDF417Request'
+      responses:
+        '200':
+          description: PDF417 generated; повтор с тем же `X-Idempotency-Key` возвращает cached response с `code=DUPLICATE_REQUEST`
+          content:
+            application/json:
+              examples:
+                success:
+                  value:
+                    success: true
+                    barcodeUrl: https://cdn.example.com/barcodes/pdf417_1.png
+                    format: pdf417
+                    metadata:
+                      width: 420
+                      height: 160
+                      dataLength: 128
+                duplicateRequest:
+                  value:
+                    code: DUPLICATE_REQUEST
+                    success: true
+                    barcodeUrl: https://cdn.example.com/barcodes/pdf417_1.png
+                    format: pdf417
+                    metadata:
+                      width: 420
+                      height: 160
+                      dataLength: 128
+              schema:
+                $ref: '#/components/schemas/GeneratePDF417Response'
+        '400':
+          $ref: '#/components/responses/ValidationError'
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
+        '409':
+          $ref: '#/components/responses/RequestInFlightError'
+        '503':
+          $ref: '#/components/responses/ServiceError'
+
+  /api/v1/barcode/generate/code128:
+    post:
+      tags: [Barcode]
+      summary: Dedicated генерация Code128
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/GenerateCode128Request'
+      responses:
+        '200':
+          description: Code128 generated; повтор с тем же `X-Idempotency-Key` возвращает cached response с `code=DUPLICATE_REQUEST`
+          content:
+            application/json:
+              examples:
+                success:
+                  value:
+                    success: true
+                    barcodeUrl: https://cdn.example.com/barcodes/code128_1.png
+                    format: code128
+                    metadata:
+                      width: 320
+                      height: 110
+                      encodedData: ABC-123
+                duplicateRequest:
+                  value:
+                    code: DUPLICATE_REQUEST
+                    success: true
+                    barcodeUrl: https://cdn.example.com/barcodes/code128_1.png
+                    format: code128
+                    metadata:
+                      width: 320
+                      height: 110
+                      encodedData: ABC-123
+              schema:
+                $ref: '#/components/schemas/GenerateCode128Response'
+        '400':
+          $ref: '#/components/responses/ValidationError'
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
+        '409':
+          $ref: '#/components/responses/RequestInFlightError'
+        '503':
+          $ref: '#/components/responses/ServiceError'
+
+  /api/v1/barcode/{id}:
+    get:
+      tags: [Barcode]
+      summary: Получить существующий баркод для remake
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Barcode record
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BarcodeRecord'
+        '400':
+          $ref: '#/components/responses/ValidationError'
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
+        '503':
+          $ref: '#/components/responses/ServiceError'
+
+  /api/v1/barcode/{id}/edit:
+    post:
+      tags: [Barcode]
+      summary: Бесплатное редактирование одного поля
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            example:
+              field: lastName
+              value: SMITH
+            schema:
+              $ref: '#/components/schemas/EditRequest'
+      responses:
+        '200':
+          description: Edit result; повтор с тем же `X-Idempotency-Key` возвращает cached response с `code=DUPLICATE_REQUEST`
+          content:
+            application/json:
+              examples:
+                success:
+                  value:
+                    newUrl: https://cdn.example.com/barcodes/pdf417_edited.png
+                    canEdit: true
+                duplicateRequest:
+                  value:
+                    code: DUPLICATE_REQUEST
+                    newUrl: https://cdn.example.com/barcodes/pdf417_edited.png
+                    canEdit: true
+              schema:
+                $ref: '#/components/schemas/EditResponse'
+        '400':
+          $ref: '#/components/responses/ValidationError'
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
+        '402':
+          $ref: '#/components/responses/InsufficientFundsError'
+        '409':
+          $ref: '#/components/responses/RequestInFlightError'
+        '503':
+          $ref: '#/components/responses/ServiceError'
+
+  /api/v1/bulk/wake:
+    post:
+      tags: [Bulk]
+      summary: Проверка активности bulk consumer
+      security:
+        - serviceToken: []
+      responses:
+        '200':
+          description: Consumer status
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BulkWakeResponse'
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
+        '403':
+          $ref: '#/components/responses/ForbiddenError'
+
+  /api/v1/upload:
+    post:
+      tags: [Bulk]
+      summary: Загрузка XLS-файла для массовой генерации (ТЗ §3.1)
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [file]
+              properties:
+                file:
+                  type: string
+                  format: binary
+                  description: XLS-файл с данными для генерации
+                revision:
+                  type: string
+                  description: Ревизия шаблона (по умолчанию US_CA_08292017)
+      responses:
+        '200':
+          description: Файл принят, batch создан и готов к подтверждению
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UploadResponse'
+              example:
+                success: true
+                batchId: batch-123
+                status: ready
+                summary:
+                  totalRows: 100
+                  validRows: 95
+                  invalidRows: 5
+                billing:
+                  canProcess: true
+                  requested: 95
+                  allowedTotal: 95
+                nextStep: confirm
+        '400':
+          $ref: '#/components/responses/ValidationError'
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
+        '402':
+          description: Недостаточно средств — частичная обработка (PARTIAL_AVAILABLE)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                code: PARTIAL_AVAILABLE
+                message: "Insufficient funds. Generate 60 of 100?"
+                details:
+                  batchId: batch-123
+                  billing:
+                    canProcess: true
+                    requested: 100
+                    allowedTotal: 60
+                  options:
+                    generatePartial:
+                      count: 60
+                    cancel:
+                      message: Cancel batch and top up balance
+        '503':
+          $ref: '#/components/responses/ServiceError'
+  /api/v1/batches:
+    get:
+      tags: [Bulk]
+      summary: Список батчей текущего пользователя (ТЗ §3.6)
+      parameters:
+        - in: query
+          name: status
+          required: false
+          schema:
+            type: string
+            enum: [pending, ready, processing, completed, cancelled, failed]
+        - in: query
+          name: page
+          required: false
+          schema:
+            type: integer
+            minimum: 1
+            default: 1
+        - in: query
+          name: limit
+          required: false
+          schema:
+            type: integer
+            minimum: 1
+            default: 20
+        - in: query
+          name: from
+          required: false
+          schema:
+            type: string
+            format: date-time
+          description: RFC3339 начало диапазона
+        - in: query
+          name: to
+          required: false
+          schema:
+            type: string
+            format: date-time
+          description: RFC3339 конец диапазона
+        - in: query
+          name: revision
+          required: false
+          schema:
+            type: string
+        - in: query
+          name: sortBy
+          required: false
+          schema:
+            type: string
+        - in: query
+          name: order
+          required: false
+          schema:
+            type: string
+            enum: [asc, desc]
+        - in: query
+          name: cursor
+          required: false
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Список батчей
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BatchListResponse'
+              example:
+                data:
+                  - batchId: batch-123
+                    status: completed
+                    totalJobs: 100
+                    completedJobs: 98
+                    failedJobs: 2
+                    createdAt: '2026-01-08T10:00:00Z'
+                    completedAt: '2026-01-08T10:15:00Z'
+                meta:
+                  page: 1
+                  limit: 20
+                  total: 1
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
+  /api/v1/batch/{batchId}:
+    get:
+      tags: [Bulk]
+      summary: Статус и прогресс батча (ТЗ §3.4)
+      parameters:
+        - in: path
+          name: batchId
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Состояние батча
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BatchStatusResponse'
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
+        '404':
+          $ref: '#/components/responses/NotFoundError'
+        '409':
+          $ref: '#/components/responses/RequestInFlightError'
+  /api/v1/batch/{batchId}/status:
+    get:
+      tags: [Bulk]
+      summary: Алиас GET /api/v1/batch/{batchId} — статус батча (ТЗ §3.4)
+      parameters:
+        - in: path
+          name: batchId
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Состояние батча
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BatchStatusResponse'
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
+        '404':
+          $ref: '#/components/responses/NotFoundError'
+        '409':
+          $ref: '#/components/responses/RequestInFlightError'
+  /api/v1/batch/{batchId}/confirm:
+    post:
+      tags: [Bulk]
+      summary: Подтверждение генерации батча (ТЗ §3.3)
+      parameters:
+        - in: path
+          name: batchId
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ConfirmRequest'
+            example:
+              action: generate_all
+      responses:
+        '202':
+          description: Батч принят в обработку
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ConfirmResponse'
+              example:
+                success: true
+                batchId: batch-123
+                status: processing
+                jobsQueued: 95
+                estimatedTimeSeconds: 285
+        '400':
+          $ref: '#/components/responses/ValidationError'
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
+        '402':
+          $ref: '#/components/responses/InsufficientFundsError'
+  /api/v1/batch/{batchId}/cancel:
+    post:
+      tags: [Bulk]
+      summary: Отмена батча (ТЗ §3.5)
+      parameters:
+        - in: path
+          name: batchId
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Батч отменён
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CancelResponse'
+              example:
+                success: true
+                batchId: batch-123
+                status: cancelled
+                refund:
+                  pending: 50
+                  refunded: 50
+                  transactionIds:
+                    - tx-1
+                    - tx-2
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
+        '503':
+          $ref: '#/components/responses/ServiceError'
+  /api/v1/batch/{batchId}/export:
+    post:
+      tags: [Bulk]
+      summary: Запустить асинхронный экспорт результатов батча
+      parameters:
+        - in: path
+          name: batchId
+          required: true
+          schema:
+            type: string
+      responses:
+        '202':
+          description: Экспорт поставлен в очередь
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ExportStartResponse'
+              example:
+                id: batch-123
+                status: queued
+        '400':
+          $ref: '#/components/responses/ValidationError'
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
+  /api/v1/export/{id}:
+    get:
+      tags: [Bulk]
+      summary: Получить статус/ссылку на готовый экспорт
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+        - in: query
+          name: download
+          required: false
+          schema:
+            type: boolean
+          description: Если true — проксирует файл вместо presigned URL
+      responses:
+        '200':
+          description: Статус экспорта, presigned URL или бинарный файл
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ExportGetResponse'
+            application/vnd.openxmlformats-officedocument.spreadsheetml.sheet:
+              schema:
+                type: string
+                format: binary
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
+        '404':
+          $ref: '#/components/responses/NotFoundError'
+  /api/v1/batch/{batchId}/errors.xlsx:
+    get:
+      tags: [Bulk]
+      summary: Скачать файл ошибок валидации (ТЗ §3.7)
+      parameters:
+        - in: path
+          name: batchId
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: XLSX-файл с ошибками валидации
+          content:
+            application/vnd.openxmlformats-officedocument.spreadsheetml.sheet:
+              schema:
+                type: string
+                format: binary
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
+        '404':
+          $ref: '#/components/responses/NotFoundError'
+  /api/v1/batch/{batchId}/results.xlsx:
+    get:
+      tags: [Bulk]
+      summary: Скачать результаты батча в XLSX (ТЗ §3.8)
+      parameters:
+        - in: path
+          name: batchId
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: XLSX-файл с результатами (buildId, barcodeUrls)
+          content:
+            application/vnd.openxmlformats-officedocument.spreadsheetml.sheet:
+              schema:
+                type: string
+                format: binary
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
+        '404':
+          $ref: '#/components/responses/NotFoundError'
+  /api/v1/template/{revision}:
+    get:
+      tags: [Bulk]
+      summary: Скачать XLS-шаблон для ревизии (ТЗ §5.4)
+      security: []
+      parameters:
+        - in: path
+          name: revision
+          required: true
+          schema:
+            type: string
+          description: Идентификатор ревизии, например US_CA_08292017
+      responses:
+        '200':
+          description: XLS-шаблон
+          content:
+            application/vnd.ms-excel:
+              schema:
+                type: string
+                format: binary
+            application/vnd.openxmlformats-officedocument.spreadsheetml.sheet:
+              schema:
+                type: string
+                format: binary
+        '404':
+          $ref: '#/components/responses/NotFoundError'
+  /api/v1/admin/batches:
+    get:
+      tags: [Admin]
+      summary: Список всех батчей (ТЗ §10.5.1)
+      security:
+        - adminToken: []
+      parameters:
+        - in: query
+          name: page
+          required: false
+          schema:
+            type: integer
+            minimum: 1
+            default: 1
+        - in: query
+          name: perPage
+          required: false
+          schema:
+            type: integer
+            minimum: 1
+            default: 20
+        - in: query
+          name: status
+          required: false
+          schema:
+            type: string
+        - in: query
+          name: userId
+          required: false
+          schema:
+            type: string
+        - in: query
+          name: revision
+          required: false
+          schema:
+            type: string
+        - in: query
+          name: from
+          required: false
+          schema:
+            type: string
+            format: date-time
+        - in: query
+          name: to
+          required: false
+          schema:
+            type: string
+            format: date-time
+      responses:
+        '200':
+          description: Список батчей с пагинацией
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AdminBatchListResponse'
+              example:
+                batches:
+                  - id: batch-123
+                    userId: user-456
+                    status: processing
+                    totalJobs: 100
+                    completedJobs: 45
+                    failedJobs: 2
+                    createdAt: '2026-01-08T10:00:00Z'
+                pagination:
+                  page: 1
+                  perPage: 20
+                  total: 150
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
+        '403':
+          $ref: '#/components/responses/ForbiddenError'
+  /api/v1/admin/batches/{batchId}:
+    get:
+      tags: [Admin]
+      summary: Детали батча (ТЗ §10.5.3)
+      security:
+        - adminToken: []
+      parameters:
+        - in: path
+          name: batchId
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Детальная информация по батчу включая jobs
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AdminBatchDetailResponse'
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
+        '403':
+          $ref: '#/components/responses/ForbiddenError'
+        '404':
+          $ref: '#/components/responses/NotFoundError'
+  /api/v1/admin/batches/{batchId}/config:
+    put:
+      tags: [Admin]
+      summary: Обновить конфигурацию батча (ТЗ §10.5.5)
+      security:
+        - adminToken: []
+      parameters:
+        - in: path
+          name: batchId
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AdminUpdateBatchConfigRequest'
+            example:
+              priority: high
+              timeout: 30000
+      responses:
+        '200':
+          description: Конфигурация батча обновлена
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AdminUpdateBatchConfigResponse'
+              example:
+                success: true
+                batchId: batch-123
+                config:
+                  priority: high
+                  timeout: 30000
+        '400':
+          $ref: '#/components/responses/ValidationError'
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
+        '403':
+          $ref: '#/components/responses/ForbiddenError'
+        '404':
+          $ref: '#/components/responses/NotFoundError'
+  /api/v1/admin/batches/{batchId}/restart:
+    post:
+      tags: [Admin]
+      summary: Перезапустить упавшие jobs батча (ТЗ §10.5.4)
+      security:
+        - adminToken: []
+      parameters:
+        - in: path
+          name: batchId
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RestartRequest'
+            example:
+              restartMode: failed_only
+              force: false
+      responses:
+        '200':
+          description: Результат перезапуска
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RestartResponse'
+              example:
+                restarted: 12
+                skipped: 3
+        '400':
+          $ref: '#/components/responses/ValidationError'
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
+        '403':
+          $ref: '#/components/responses/ForbiddenError'
+        '404':
+          $ref: '#/components/responses/NotFoundError'
+  /admin/revisions:
+    get:
+      tags: [Admin]
+      summary: Список конфигов ревизий
+      security:
+        - adminToken: []
+      responses:
+        '200':
+          description: Revision configs
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AdminRevisionListResponse'
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
+        '403':
+          $ref: '#/components/responses/ForbiddenError'
+
+  /admin/revisions/{revision}:
+    put:
+      tags: [Admin]
+      summary: Обновить конфиг ревизии
+      security:
+        - adminToken: []
+      parameters:
+        - in: path
+          name: revision
+          required: true
+          schema:
+            type: string
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateRevisionRequest'
+      responses:
+        '200':
+          description: Updated revision config request payload; повтор с тем же `X-Idempotency-Key` возвращает cached response с `code=DUPLICATE_REQUEST`
+          content:
+            application/json:
+              examples:
+                success:
+                  value:
+                    enabled: true
+                    calculationChain:
+                      - field: DAQ
+                        source: calculate
+                      - field: DAK
+                        source: calculate
+                duplicateRequest:
+                  value:
+                    code: DUPLICATE_REQUEST
+                    enabled: true
+                    calculationChain:
+                      - field: DAQ
+                        source: calculate
+                      - field: DAK
+                        source: calculate
+              schema:
+                $ref: '#/components/schemas/UpdateRevisionRequest'
+        '400':
+          $ref: '#/components/responses/ValidationError'
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
+        '403':
+          $ref: '#/components/responses/ForbiddenError'
+
+  /api/v1/admin/stats:
+    get:
+      tags: [Admin]
+      summary: Получить административную статистику (агрегаты за период from..to)
+      security:
+        - adminToken: []
+      parameters:
+        - in: query
+          name: from
+          required: false
+          description: RFC3339 начало периода (по умолчанию - начало дня UTC)
+          schema:
+            type: string
+        - in: query
+          name: to
+          required: false
+          description: RFC3339 конец периода (по умолчанию - now UTC)
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Admin stats
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AdminStatsResponse'
+              example:
+                totalBatches: 1500
+                activeBatches: 15
+                completedToday: 45
+                failedToday: 3
+                avgProcessingTime: 125000
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
+        '403':
+          $ref: '#/components/responses/ForbiddenError'
+        '503':
+          $ref: '#/components/responses/ServiceError'
+        '409':
+          $ref: '#/components/responses/RequestInFlightError'
+
+  /admin/config/timeouts:
+    put:
+      tags: [Admin]
+      summary: Обновить таймауты downstream-сервисов
+      security:
+        - adminToken: []
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ServiceTimeouts'
+      responses:
+        '200':
+          description: Updated timeouts; повтор с тем же `X-Idempotency-Key` возвращает cached response с `code=DUPLICATE_REQUEST`
+          content:
+            application/json:
+              examples:
+                success:
+                  value:
+                    barcodeGen: 30000
+                    billing: 5000
+                    ai: 60000
+                    history: 5000
+                    auth: 5000
+                duplicateRequest:
+                  value:
+                    code: DUPLICATE_REQUEST
+                    barcodeGen: 30000
+                    billing: 5000
+                    ai: 60000
+                    history: 5000
+                    auth: 5000
+              schema:
+                $ref: '#/components/schemas/ServiceTimeouts'
+        '400':
+          $ref: '#/components/responses/ValidationError'
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
+        '403':
+          $ref: '#/components/responses/ForbiddenError'
+        '409':
+          $ref: '#/components/responses/RequestInFlightError'
+
+  /admin/config/topup-bonus:
+    put:
+      tags: [Admin]
+      summary: Обновить конфиг бонусов при пополнении
+      security:
+        - adminToken: []
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TopupBonusConfig'
+      responses:
+        '200':
+          description: Updated topup bonus config; повтор с тем же `X-Idempotency-Key` возвращает cached response с `code=DUPLICATE_REQUEST`
+          content:
+            application/json:
+              examples:
+                success:
+                  value:
+                    enabled: true
+                    tiers:
+                      - minAmount: 10
+                        maxAmount: 49.99
+                        bonusPercent: 5
+                duplicateRequest:
+                  value:
+                    code: DUPLICATE_REQUEST
+                    enabled: true
+                    tiers:
+                      - minAmount: 10
+                        maxAmount: 49.99
+                        bonusPercent: 5
+              schema:
+                $ref: '#/components/schemas/TopupBonusConfig'
+        '400':
+          $ref: '#/components/responses/ValidationError'
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
+        '403':
+          $ref: '#/components/responses/ForbiddenError'
+        '409':
+          $ref: '#/components/responses/RequestInFlightError'
+
+  /api/v1/admin/config/bulk-limits:
+    get:
+      tags: [Admin]
+      summary: Получить конфиг лимитов для bulk
+      security:
+        - adminToken: []
+      responses:
+        '200':
+          description: Bulk limits config
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BulkLimitsConfig'
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
+        '403':
+          $ref: '#/components/responses/ForbiddenError'
+
+    put:
+      tags: [Admin]
+      summary: Обновить конфиг лимитов для bulk
+      security:
+        - adminToken: []
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/BulkLimitsConfig'
+      responses:
+        '200':
+          description: Updated bulk limits config; повтор с тем же `X-Idempotency-Key` возвращает cached response с `code=DUPLICATE_REQUEST`
+          content:
+            application/json:
+              examples:
+                success:
+                  value:
+                    enabled: true
+                    defaultPerUser: 10
+                    maxPerBatch: 1000
+                    perRevision:
+                      US_CA_08292017: 20
+              schema:
+                $ref: '#/components/schemas/BulkLimitsConfig'
+        '400':
+          $ref: '#/components/responses/ValidationError'
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
+        '403':
+          $ref: '#/components/responses/ForbiddenError'
+        '409':
+          $ref: '#/components/responses/RequestInFlightError'
+
+  /admin/kafka/topics:
+    get:
+      tags: [Admin]
+      summary: Список Kafka топиков
+      security:
+        - adminToken: []
+      responses:
+        '200':
+          description: Kafka topics
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/KafkaTopicsResponse'
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
+        '403':
+          $ref: '#/components/responses/ForbiddenError'
+
+  /api/v1/admin/users/{userId}/batches:
+    get:
+      tags: [Admin]
+      summary: Список батчей для указанного пользователя (админ)
+      security:
+        - adminToken: []
+      parameters:
+        - in: path
+          name: userId
+          required: true
+          schema:
+            type: string
+        - in: query
+          name: page
+          required: false
+          schema:
+            type: integer
+            minimum: 1
+        - in: query
+          name: perPage
+          required: false
+          schema:
+            type: integer
+            minimum: 1
+        - in: query
+          name: status
+          required: false
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Batches for user
+          content:
+            application/json:
+              examples:
+                sample:
+                  summary: Пример ответа с одним батчем
+                  value:
+                    batches:
+                      - id: batch-123
+                        userId: user-456
+                        status: processing
+                        totalJobs: 100
+                        completedJobs: 45
+                        failedJobs: 2
+                        createdAt: '2026-01-08T10:00:00Z'
+                    pagination:
+                      page: 1
+                      perPage: 20
+                      total: 1
+              schema:
+                $ref: '#/components/schemas/UserBatchesResponse'
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
+        '403':
+          $ref: '#/components/responses/ForbiddenError'
+
+  /internal/validate:
+    post:
+      tags: [Internal]
+      summary: Валидация строки bulk-задачи
+      security:
+        - serviceToken: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            example:
+              userId: user-1
+              batchId: batch-77
+              buildId: build-20260318-001
+              rowNumber: 4
+              revision: US_CA_08292017
+              fields:
+                firstName: JOHN
+                lastName: DOE
+                dateOfBirth: 1990-05-15
+            schema:
+              $ref: '#/components/schemas/InternalValidateRequest'
+      responses:
+        '200':
+          description: Validation result
+          content:
+            application/json:
+              examples:
+                valid:
+                  value:
+                    valid: true
+                invalid:
+                  value:
+                    valid: false
+                    errors:
+                      - revision is required
+                      - fields must not be empty
+              schema:
+                $ref: '#/components/schemas/InternalValidateResponse'
+        '400':
+          $ref: '#/components/responses/ValidationError'
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
+        '403':
+          $ref: '#/components/responses/ForbiddenError'
+
+  /internal/billing/quote:
+    post:
+      tags: [Internal]
+      summary: Внутренняя котировка для Bulk Service
+      security:
+        - serviceToken: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/InternalQuoteRequest'
+      responses:
+        '200':
+          description: Quote response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/QuoteResponse'
+        '400':
+          $ref: '#/components/responses/ValidationError'
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
+        '403':
+          $ref: '#/components/responses/ForbiddenError'
+        '402':
+          $ref: '#/components/responses/InsufficientFundsError'
+        '503':
+          $ref: '#/components/responses/ServiceError'
+
+  /internal/billing/block-batch:
+    post:
+      tags: [Internal]
+      summary: Блокировка батча для Bulk Service
+      security:
+        - serviceToken: []
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            example:
+              userId: user-1
+              count: 10
+              batchId: batch-77
+            schema:
+              $ref: '#/components/schemas/BlockBatchRequest'
+      responses:
+        '200':
+          description: Transaction IDs; повтор с тем же `X-Idempotency-Key` возвращает cached response с `code=DUPLICATE_REQUEST`
+          content:
+            application/json:
+              examples:
+                success:
+                  value:
+                    transactionIds:
+                      - batch-77-tx-1
+                      - batch-77-tx-2
+                      - batch-77-tx-3
+                duplicateRequest:
+                  value:
+                    code: DUPLICATE_REQUEST
+                    transactionIds:
+                      - batch-77-tx-1
+                      - batch-77-tx-2
+                      - batch-77-tx-3
+              schema:
+                $ref: '#/components/schemas/BlockBatchResponse'
+        '400':
+          $ref: '#/components/responses/ValidationError'
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
+        '403':
+          $ref: '#/components/responses/ForbiddenError'
+        '409':
+          $ref: '#/components/responses/RequestInFlightError'
+        '503':
+          $ref: '#/components/responses/ServiceError'
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+    adminToken:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+    serviceToken:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+
+  parameters:
+    IdempotencyKey:
+      in: header
+      name: X-Idempotency-Key
+      required: true
+      schema:
+        type: string
+      description: Обязателен для write-операций, когда `ENABLE_IDEMPOTENCY=true`; повторный запрос с тем же ключом возвращает cached response (`HTTP 200`, `code=DUPLICATE_REQUEST`).
+
+  responses:
+    ValidationError:
+      description: Validation error
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+    InsufficientFundsError:
+      description: Insufficient funds or free edit already used
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+    ServiceError:
+      description: Downstream service error
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+    UnauthorizedError:
+      description: Missing or invalid bearer token
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/SimpleErrorResponse'
+    ForbiddenError:
+      description: Invalid admin or service token
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/SimpleErrorResponse'
+    RequestInFlightError:
+      description: A request with the same idempotency key is already being processed
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+
+    NotFoundError:
+      description: Resource not found
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+  schemas:
+    SimpleErrorResponse:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: string
+        code:
+          type: string
+          description: Присутствует, например, в maintenance mode.
+
+    ErrorResponse:
+      type: object
+      required: [code, message]
+      example:
+        code: VALIDATION_ERROR
+        message: "required input fields missing: [lastName]"
+        details:
+          missingFields:
+            - lastName
+      properties:
+        code:
+          type: string
+          enum:
+            - VALIDATION_ERROR
+            - MISSING_DEPENDENCY
+            - INSUFFICIENT_FUNDS
+            - PARTIAL_FUNDS
+            - DUPLICATE_REQUEST
+            - BARCODEGEN_ERROR
+            - BILLING_ERROR
+            - REQUEST_IN_FLIGHT
+            - PARTIAL_AVAILABLE
+            - SERVICE_ERROR
+            - BATCH_NOT_FOUND
+            - BATCH_ALREADY_PROCESSED
+            - BATCH_CANCELLED
+            - NOT_FOUND
+        message:
+          type: string
+        details:
+          type: object
+          additionalProperties: true
+
+    PartialFundsResponse:
+      type: object
+      required: [code, message, partial, confirmed]
+      example:
+        code: PARTIAL_FUNDS
+        message: only 3 of 5 units available, set confirmed=true to proceed
+        partial: true
+        confirmed: false
+      properties:
+        code:
+          type: string
+          enum: [PARTIAL_FUNDS]
+        message:
+          type: string
+        partial:
+          type: boolean
+          example: true
+        confirmed:
+          type: boolean
+          example: false
+
+    RevisionListResponse:
+      type: object
+      required: [revisions]
+      properties:
+        revisions:
+          type: array
+          items:
+            $ref: '#/components/schemas/RevisionSummary'
+
+    RevisionSummary:
+      type: object
+      required: [name, displayName, enabled]
+      properties:
+        name:
+          type: string
+        displayName:
+          type: string
+        enabled:
+          type: boolean
+
+    QuoteResponse:
+      type: object
+      required: [canProcess, partial, requested, allowedTotal, unitPrice, bySource]
+      example:
+        canProcess: true
+        partial: false
+        requested: 5
+        allowedTotal: 5
+        unitPrice: 0.5
+        bySource:
+          subscription:
+            units: 3
+            remaining: 27
+          credits:
+            units: 2
+            remaining: 18
+          wallet:
+            units: 0
+            amount: 0
+      properties:
+        canProcess:
+          type: boolean
+        partial:
+          type: boolean
+        requested:
+          type: integer
+        allowedTotal:
+          type: integer
+        unitPrice:
+          type: number
+          format: double
+        bySource:
+          $ref: '#/components/schemas/QuoteBreakdown'
+        shortfall:
+          $ref: '#/components/schemas/Shortfall'
+
+    QuoteBreakdown:
+      type: object
+      required: [subscription, credits, wallet]
+      properties:
+        subscription:
+          $ref: '#/components/schemas/SourceBreakdown'
+        credits:
+          $ref: '#/components/schemas/SourceBreakdown'
+        wallet:
+          $ref: '#/components/schemas/SourceBreakdown'
+
+    SourceBreakdown:
+      type: object
+      properties:
+        units:
+          type: integer
+        remaining:
+          type: integer
+        amount:
+          type: number
+          format: double
+
+    Shortfall:
+      type: object
+      required: [units, amountRequired]
+      properties:
+        units:
+          type: integer
+        amountRequired:
+          type: number
+          format: double
+
+    GenerateRequest:
+      type: object
+      required: [revision, barcodeType, units]
+      example:
+        revision: US_CA_08292017
+        barcodeType: pdf417
+        units: 2
+        confirmed: true
+        buildId: build-20260318-001
+        batchId: batch-42
+        fields:
+          firstName: JOHN
+          lastName: DOE
+          dateOfBirth: 1990-05-15
+          street: 123 Main St
+          city: Los Angeles
+          state: CA
+          zipCode: '90001'
+      properties:
+        revision:
+          type: string
+        barcodeType:
+          type: string
+          enum: [pdf417, code128]
+        units:
+          type: integer
+          minimum: 1
+        confirmed:
+          type: boolean
+          description: Если не передан, трактуется как false.
+        buildId:
+          type: string
+        batchId:
+          type: string
+        fields:
+          type: object
+          additionalProperties: true
+        generateSignature:
+          type: boolean
+        signatureStyle:
+          type: string
+        generatePhoto:
+          type: boolean
+        photoDescription:
+          type: string
+        gender:
+          type: string
+        age:
+          type: integer
+
+    GenerateResponse:
+      type: object
+      required: [success, barcodes, computed, skipped, billing]
+      example:
+        success: true
+        buildId: build-20260318-001
+        batchId: batch-42
+        barcodes:
+          - url: https://cdn.example.com/barcodes/pdf417_1.png
+            format: pdf417
+        computed:
+          - DAQ
+          - DAK
+          - DAE
+          - DBB
+        skipped: []
+        billing:
+          totalCost: 0.5
+          bySource:
+            subscription:
+              units: 1
+              remaining: 29
+            credits:
+              units: 0
+              remaining: 20
+            wallet:
+              units: 0
+              amount: 0
+          referralEligible: 0
+      properties:
+        success:
+          type: boolean
+        buildId:
+          type: string
+        batchId:
+          type: string
+        barcodes:
+          type: array
+          items:
+            $ref: '#/components/schemas/BarcodeItem'
+        computed:
+          type: array
+          items:
+            type: string
+        skipped:
+          type: array
+          items:
+            type: string
+        billing:
+          $ref: '#/components/schemas/GenerateBillingResult'
+
+    BarcodeItem:
+      type: object
+      required: [url, format]
+      properties:
+        url:
+          type: string
+        format:
+          type: string
+
+    GenerateBillingResult:
+      type: object
+      required: [totalCost, bySource]
+      properties:
+        totalCost:
+          type: number
+          format: double
+        bySource:
+          $ref: '#/components/schemas/QuoteBreakdown'
+        referralEligible:
+          type: number
+          format: double
+        referral:
+          $ref: '#/components/schemas/Referral'
+
+    Referral:
+      type: object
+      required: [eligible, eligibleAmount]
+      properties:
+        eligible:
+          type: boolean
+        eligibleAmount:
+          type: number
+          format: double
+        referrerId:
+          type: string
+
+    BarcodeOptions:
+      type: object
+      properties:
+        width:
+          type: integer
+        height:
+          type: integer
+        errorCorrection:
+          type: string
+        includeText:
+          type: boolean
+
+    GeneratePDF417Request:
+      type: object
+      required: [fields]
+      properties:
+        revision:
+          type: string
+        buildId:
+          type: string
+        batchId:
+          type: string
+        fields:
+          type: object
+          additionalProperties: true
+        options:
+          $ref: '#/components/schemas/BarcodeOptions'
+
+    GeneratePDF417Response:
+      type: object
+      required: [success, barcodeUrl, format, metadata]
+      properties:
+        success:
+          type: boolean
+        barcodeUrl:
+          type: string
+        format:
+          type: string
+        metadata:
+          $ref: '#/components/schemas/BarcodeMetadata'
+
+    GenerateCode128Request:
+      type: object
+      required: [data]
+      properties:
+        data:
+          type: string
+        buildId:
+          type: string
+        options:
+          $ref: '#/components/schemas/BarcodeOptions'
+
+    GenerateCode128Response:
+      type: object
+      required: [success, barcodeUrl, format, metadata]
+      properties:
+        success:
+          type: boolean
+        barcodeUrl:
+          type: string
+        format:
+          type: string
+        metadata:
+          $ref: '#/components/schemas/BarcodeMetadata'
+
+    BarcodeMetadata:
+      type: object
+      properties:
+        width:
+          type: integer
+        height:
+          type: integer
+        dataLength:
+          type: integer
+        encodedData:
+          type: string
+
+    EditRequest:
+      type: object
+      required: [field, value]
+      example:
+        field: lastName
+        value: SMITH
+      properties:
+        field:
+          type: string
+        value:
+          type: string
+
+    EditResponse:
+      type: object
+      required: [canEdit]
+      example:
+        newUrl: https://cdn.example.com/barcodes/pdf417_edited.png
+        canEdit: true
+      properties:
+        newUrl:
+          type: string
+        canEdit:
+          type: boolean
+        reason:
+          type: string
+
+    BarcodeRecord:
+      type: object
+      properties:
+        id:
+          type: string
+        userId:
+          type: string
+        revision:
+          type: string
+        barcodeType:
+          type: string
+        barcodeUrl:
+          type: string
+        fields:
+          type: object
+          additionalProperties: true
+        editFlag:
+          type: boolean
+        createdAt:
+          type: string
+
+    RevisionSchema:
+      type: object
+      required: [revision, displayName, fields, groups]
+      properties:
+        revision:
+          type: string
+        displayName:
+          type: string
+        fields:
+          type: array
+          items:
+            $ref: '#/components/schemas/FieldSchema'
+        groups:
+          type: array
+          items:
+            $ref: '#/components/schemas/FieldGroup'
+
+    FieldSchema:
+      type: object
+      required: [name, type, required, label, order]
+      properties:
+        name:
+          type: string
+        type:
+          type: string
+          enum: [string, date, enum, number]
+        required:
+          type: boolean
+        label:
+          type: string
+        order:
+          type: integer
+        options:
+          type: array
+          items:
+            type: string
+        validation:
+          $ref: '#/components/schemas/FieldValidation'
+
+    FieldValidation:
+      type: object
+      properties:
+        minLength:
+          type: integer
+        maxLength:
+          type: integer
+        pattern:
+          type: string
+        maxDate:
+          type: string
+        minDate:
+          type: string
+
+    FieldGroup:
+      type: object
+      required: [name, label, fields]
+      properties:
+        name:
+          type: string
+        label:
+          type: string
+        fields:
+          type: array
+          items:
+            type: string
+
+    AdminRevisionListResponse:
+      type: object
+      required: [revisions]
+      properties:
+        revisions:
+          type: array
+          items:
+            $ref: '#/components/schemas/AdminRevisionView'
+
+    AdminRevisionView:
+      type: object
+      required: [name, displayName, enabled, calculationChain]
+      properties:
+        name:
+          type: string
+        displayName:
+          type: string
+        enabled:
+          type: boolean
+        calculationChain:
+          type: array
+          items:
+            type: string
+
+    UserBatchesResponse:
+      type: object
+      required: [batches, pagination]
+      properties:
+        batches:
+          type: array
+          items:
+            $ref: '#/components/schemas/UserBatchSummary'
+        pagination:
+          type: object
+          required: [page, perPage, total]
+          properties:
+            page:
+              type: integer
+            perPage:
+              type: integer
+            total:
+              type: integer
+
+    UserBatchSummary:
+      type: object
+      required: [id, userId, status, totalJobs, createdAt]
+      properties:
+        id:
+          type: string
+        userId:
+          type: string
+        status:
+          type: string
+        totalJobs:
+          type: integer
+        completedJobs:
+          type: integer
+        failedJobs:
+          type: integer
+        createdAt:
+          type: string
+
+    UpdateRevisionRequest:
+      type: object
+      properties:
+        enabled:
+          type: boolean
+        calculationChain:
+          type: array
+          items:
+            $ref: '#/components/schemas/ChainEntry'
+
+    ChainEntry:
+      type: object
+      required: [field, source]
+      properties:
+        field:
+          type: string
+        source:
+          type: string
+          enum: [calculate, user, random]
+        dependsOn:
+          type: array
+          items:
+            type: string
+        params:
+          type: object
+          additionalProperties: true
+
+    ServiceTimeouts:
+      type: object
+      properties:
+        barcodeGen:
+          type: integer
+          description: Таймаут BarcodeGen в миллисекундах
+        billing:
+          type: integer
+          description: Таймаут Billing Service в миллисекундах
+        ai:
+          type: integer
+          description: Таймаут AI Service в миллисекундах
+        history:
+          type: integer
+          description: Таймаут History Service в миллисекундах (0 = дефолт 5s)
+        auth:
+          type: integer
+          description: Таймаут Auth Service в миллисекундах (0 = дефолт 5s)
+
+    TopupBonusConfig:
+      type: object
+      required: [enabled, tiers]
+      properties:
+        enabled:
+          type: boolean
+        tiers:
+          type: array
+          items:
+            $ref: '#/components/schemas/TopupBonusTier'
+
+    TopupBonusTier:
+      type: object
+      required: [minAmount, bonusPercent]
+      properties:
+        minAmount:
+          type: number
+          format: double
+        maxAmount:
+          type: number
+          format: double
+          nullable: true
+        bonusPercent:
+          type: number
+          format: double
+
+    BulkLimitsConfig:
+      type: object
+      required: [enabled]
+      example:
+        enabled: true
+        defaultPerUser: 10
+        maxPerBatch: 1000
+        perRevision:
+          US_CA_08292017: 20
+      properties:
+        enabled:
+          type: boolean
+        defaultPerUser:
+          type: integer
+          description: Default maximum units per user in a time window
+        maxPerBatch:
+          type: integer
+          description: Maximum allowed units in a single batch
+        perRevision:
+          type: object
+          description: Персонализированные лимиты по ревизии (ключ = revision, значение = max units)
+          additionalProperties:
+            type: integer
+
+    KafkaTopicsResponse:
+      type: object
+      required: [topics]
+      properties:
+        topics:
+          type: array
+          items:
+            $ref: '#/components/schemas/KafkaTopic'
+
+    KafkaTopic:
+      type: object
+      required: [name, enabled]
+      properties:
+        name:
+          type: string
+        enabled:
+          type: boolean
+
+    BulkWakeResponse:
+      type: object
+      required: [status, pendingMessages]
+      properties:
+        status:
+          type: string
+          example: awake
+        pendingMessages:
+          type: integer
+
+    InternalValidateRequest:
+      type: object
+      example:
+        userId: user-1
+        batchId: batch-77
+        buildId: build-20260318-001
+        rowNumber: 4
+        revision: US_CA_08292017
+        fields:
+          firstName: JOHN
+          lastName: DOE
+          dateOfBirth: 1990-05-15
+      properties:
+        userId:
+          type: string
+        batchId:
+          type: string
+        buildId:
+          type: string
+        rowNumber:
+          type: integer
+        revision:
+          type: string
+        fields:
+          type: object
+          additionalProperties: true
+
+    InternalValidateResponse:
+      type: object
+      required: [valid]
+      example:
+        valid: false
+        errors:
+          - revision is required
+          - fields must not be empty
+      properties:
+        valid:
+          type: boolean
+        errors:
+          type: array
+          items:
+            type: string
+
+    InternalQuoteRequest:
+      type: object
+      properties:
+        userId:
+          type: string
+        count:
+          type: integer
+        revision:
+          type: string
+
+    BlockBatchRequest:
+      type: object
+      example:
+        userId: user-1
+        count: 10
+        batchId: batch-77
+      properties:
+        userId:
+          type: string
+        count:
+          type: integer
+        batchId:
+          type: string
+
+    BlockBatchResponse:
+      type: object
+      required: [transactionIds]
+      example:
+        transactionIds:
+          - batch-77-tx-1
+          - batch-77-tx-2
+          - batch-77-tx-3
+      properties:
+        transactionIds:
+          type: array
+          items:
+            type: string
+
+    AdminStatsResponse:
+      type: object
+      required: [totalBatches, activeBatches, completedToday, failedToday, avgProcessingTime]
+      properties:
+        totalBatches:
+          type: integer
+        activeBatches:
+          type: integer
+          description: Approximate number of active batches (pending in queue or processing)
+        completedToday:
+          type: integer
+        failedToday:
+          type: integer
+        avgProcessingTime:
+          type: integer
+          description: Average processing time in milliseconds
+    UploadResponse:
+      type: object
+      required: [success, batchId, status]
+      properties:
+        success:
+          type: boolean
+        batchId:
+          type: string
+        status:
+          type: string
+          enum: [ready, partial_available]
+        summary:
+          $ref: '#/components/schemas/UploadSummary'
+        billing:
+          type: object
+          additionalProperties: true
+        nextStep:
+          type: string
+          example: confirm
+    UploadSummary:
+      type: object
+      required: [totalRows, validRows, invalidRows]
+      properties:
+        totalRows:
+          type: integer
+        validRows:
+          type: integer
+        invalidRows:
+          type: integer
+        estimatedCost:
+          type: number
+          format: double
+        currency:
+          type: string
+    BatchListResponse:
+      type: object
+      required: [data, meta]
+      properties:
+        data:
+          type: array
+          items:
+            $ref: '#/components/schemas/BatchSummary'
+        meta:
+          type: object
+          required: [page, limit, total]
+          properties:
+            page:
+              type: integer
+            limit:
+              type: integer
+            total:
+              type: integer
+    BatchSummary:
+      type: object
+      required: [batchId, status, totalJobs, createdAt]
+      properties:
+        batchId:
+          type: string
+        status:
+          type: string
+        totalJobs:
+          type: integer
+        completedJobs:
+          type: integer
+        failedJobs:
+          type: integer
+        createdAt:
+          type: string
+          format: date-time
+        completedAt:
+          type: string
+          format: date-time
+    BatchStatusResponse:
+      type: object
+      required: [batchId, status]
+      example:
+        batchId: batch-123
+        status: processing
+        progress:
+          total: 100
+          completed: 45
+          failed: 2
+          pending: 53
+          percentComplete: 45.0
+        billing:
+          charged: 45
+          refunded: 2
+          pending: 53
+        createdAt: '2026-01-08T10:00:00Z'
+        updatedAt: '2026-01-08T10:15:00Z'
+      properties:
+        batchId:
+          type: string
+        status:
+          type: string
+        progress:
+          type: object
+          properties:
+            total:
+              type: integer
+            completed:
+              type: integer
+            failed:
+              type: integer
+            pending:
+              type: integer
+            percentComplete:
+              type: number
+              format: double
+        results:
+          type: object
+          properties:
+            successful:
+              type: array
+              items:
+                type: object
+                properties:
+                  row:
+                    type: integer
+                  buildId:
+                    type: string
+                  barcodeUrls:
+                    type: object
+                    properties:
+                      pdf417:
+                        type: string
+                      code128:
+                        type: string
+            failed:
+              type: array
+              items:
+                type: object
+                properties:
+                  row:
+                    type: integer
+                  error:
+                    type: object
+                    properties:
+                      code:
+                        type: string
+                      message:
+                        type: string
+        billing:
+          type: object
+          properties:
+            charged:
+              type: integer
+            refunded:
+              type: integer
+            pending:
+              type: integer
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+    ConfirmRequest:
+      type: object
+      required: [action]
+      properties:
+        action:
+          type: string
+          enum: [generate_all, generate_partial, generate_valid, cancel]
+        count:
+          type: integer
+          minimum: 1
+          description: Обязателен при action=generate_partial
+    ConfirmResponse:
+      type: object
+      required: [success, batchId, status, jobsQueued, estimatedTimeSeconds]
+      properties:
+        success:
+          type: boolean
+        batchId:
+          type: string
+        status:
+          type: string
+          example: processing
+        jobsQueued:
+          type: integer
+        estimatedTimeSeconds:
+          type: integer
+    CancelResponse:
+      type: object
+      required: [success, batchId, status, refund]
+      properties:
+        success:
+          type: boolean
+        batchId:
+          type: string
+        status:
+          type: string
+          example: cancelled
+        refund:
+          type: object
+          required: [pending, refunded, transactionIds]
+          properties:
+            pending:
+              type: integer
+            refunded:
+              type: integer
+            transactionIds:
+              type: array
+              items:
+                type: string
+    ExportStartResponse:
+      type: object
+      required: [id, status]
+      properties:
+        id:
+          type: string
+        status:
+          type: string
+          enum: [queued, processing, done, failed]
+    ExportGetResponse:
+      type: object
+      required: [id, status]
+      properties:
+        id:
+          type: string
+        status:
+          type: string
+          enum: [queued, processing, done, failed]
+        url:
+          type: string
+          description: Presigned URL для скачивания
+        expires_at:
+          type: string
+          format: date-time
+        storage_id:
+          type: string
+        error:
+          type: string
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+    AdminBatchListResponse:
+      type: object
+      required: [batches, pagination]
+      properties:
+        batches:
+          type: array
+          items:
+            $ref: '#/components/schemas/AdminBatchSummary'
+        pagination:
+          type: object
+          required: [page, perPage, total]
+          properties:
+            page:
+              type: integer
+            perPage:
+              type: integer
+            total:
+              type: integer
+    AdminBatchSummary:
+      type: object
+      required: [id, userId, status, totalJobs, createdAt]
+      properties:
+        id:
+          type: string
+        userId:
+          type: string
+        status:
+          type: string
+        totalJobs:
+          type: integer
+        completedJobs:
+          type: integer
+        failedJobs:
+          type: integer
+        createdAt:
+          type: string
+          format: date-time
+    AdminBatchDetailResponse:
+      type: object
+      required: [id, userId, status, revision, jobs, config, createdAt, updatedAt]
+      example:
+        id: batch-123
+        userId: user-456
+        status: processing
+        revision: US_CA_08292017
+        jobs:
+          - id: job-1
+            status: completed
+            buildId: build-abc
+            rowNumber: 2
+        config:
+          revision: US_CA_08292017
+        createdAt: '2026-01-08T10:00:00Z'
+        updatedAt: '2026-01-08T10:15:00Z'
+      properties:
+        id:
+          type: string
+        userId:
+          type: string
+        status:
+          type: string
+        revision:
+          type: string
+        jobs:
+          type: array
+          items:
+            $ref: '#/components/schemas/AdminJobSummary'
+        config:
+          type: object
+          additionalProperties: true
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+    AdminJobSummary:
+      type: object
+      required: [id, status, rowNumber]
+      properties:
+        id:
+          type: string
+        status:
+          type: string
+        buildId:
+          type: string
+        rowNumber:
+          type: integer
+    AdminUpdateBatchConfigRequest:
+      type: object
+      properties:
+        priority:
+          type: string
+          description: Приоритет обработки (например high, normal, low)
+        timeout:
+          type: integer
+          description: Таймаут в миллисекундах
+    AdminUpdateBatchConfigResponse:
+      type: object
+      required: [success, batchId, config]
+      properties:
+        success:
+          type: boolean
+        batchId:
+          type: string
+        config:
+          type: object
+          required: [priority, timeout]
+          properties:
+            priority:
+              type: string
+            timeout:
+              type: integer
+    RestartRequest:
+      type: object
+      required: [restartMode]
+      properties:
+        restartMode:
+          type: string
+          enum: [failed_only]
+          description: Режим перезапуска. Поддерживается только failed_only.
+        force:
+          type: boolean
+          description: Принудительный перезапуск независимо от текущего статуса
+    RestartResponse:
+      type: object
+      required: [restarted, skipped]
+      properties:
+        restarted:
+          type: integer
+          description: Количество перезапущенных jobs
+        skipped:
+          type: integer
+          description: Количество пропущенных jobs
+

@@ -1,0 +1,59 @@
+# Правила валидации для ревизии US_CA_08292017 (AAMVA).
+# Поля соответствуют шаблону XLS из ТЗ §5.4 и кодам полей из §5.3.
+# Форматы дат: YYYYMMDD (8 цифр) согласно стандарту AAMVA.
+
+# DAC — имя (First Name)
+DAC:
+  pattern: "^[A-Za-z '-]+$"
+  minLength: 1
+  maxLength: 40
+  required: true
+
+# DCS — фамилия (Last Name)
+DCS:
+  pattern: "^[A-Za-z '-]+$"
+  minLength: 1
+  maxLength: 40
+  required: true
+
+# DBB — дата рождения (Date of Birth), формат YYYYMMDD
+DBB:
+  pattern: "^\\d{8}$"
+  required: true
+
+# DAG — адрес (Street Address)
+DAG:
+  minLength: 1
+  maxLength: 100
+  required: true
+
+# DAI — город (City)
+DAI:
+  minLength: 1
+  maxLength: 50
+  required: true
+
+# DAJ — штат (State), 2 заглавные буквы
+DAJ:
+  pattern: "^[A-Z]{2}$"
+  minLength: 2
+  maxLength: 2
+  required: true
+
+# DAK — почтовый индекс (ZIP), 5 или 9 цифр
+DAK:
+  pattern: "^\\d{5}(\\d{4})?$"
+  minLength: 5
+  maxLength: 9
+  required: true
+
+# DBA — дата истечения срока (Expiration Date), формат YYYYMMDD
+DBA:
+  pattern: "^\\d{8}$"
+  required: true
+
+# DBD — дата выдачи (Issue Date), формат YYYYMMDD
+DBD:
+  pattern: "^\\d{8}$"
+  required: true
+

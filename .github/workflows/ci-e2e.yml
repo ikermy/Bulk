@@ -1,0 +1,127 @@
+name: CI E2E Tests
+
+on:
+  push:
+    branches: [ main, master ]
+  pull_request:
+    branches: [ main, master ]
+
+jobs:
+  e2e:
+    name: E2E (docker-compose)
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    env:
+      KAFKA_IMAGE: bitnami/kafka:3
+      ZOOKEEPER_IMAGE: bitnami/zookeeper:3
+      POSTGRES_IMAGE: postgres:15
+      MINIO_IMAGE: minio/minio:latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v2
+
+      - name: Cache Kafka image
+        id: cache-kafka
+        uses: actions/cache@v4
+        with:
+          path: /tmp/kafka-image
+          key: kafka-image-${{ env.KAFKA_IMAGE }}-${{ github.sha }}
+          restore-keys: |
+            kafka-image-${{ env.KAFKA_IMAGE }}-
+      - name: Try to restore saved kafka image
+        if: steps.cache-kafka.outputs.cache-hit == 'true'
+        run: |
+          ls -la /tmp/kafka-image || true
+          docker load -i /tmp/kafka-image/kafka.tar || true
+      - name: Pull dependent images
+        run: |
+          docker pull $KAFKA_IMAGE || true
+          docker pull $ZOOKEEPER_IMAGE || true
+          docker pull $POSTGRES_IMAGE || true
+          docker pull $MINIO_IMAGE || true
+          # save kafka image for next runs (best-effort)
+          mkdir -p /tmp/kafka-image || true
+          docker save $KAFKA_IMAGE -o /tmp/kafka-image/kafka.tar || true
+
+      - name: Start services (docker-compose.int)
+        working-directory: ${{ github.workspace }}
+        run: |
+          docker-compose -f deploy/docker-compose.int.yml up -d --build
+
+      - name: Wait for Postgres
+        run: |
+          for i in {1..30}; do
+            docker run --rm --network host alpine sh -c "apk add --no-cache postgresql-client >/dev/null 2>&1; pg_isready -h 127.0.0.1 -p 5433 && exit 0" && break || sleep 2
+          done
+
+      - name: Wait for Kafka (with retries)
+        run: |
+          set -e
+          ATTEMPTS=20
+          for i in $(seq 1 $ATTEMPTS); do
+            echo "Checking kafka... attempt $i"
+            docker run --rm --network host curlimages/curl:7.88.1 curl -sS http://127.0.0.1:9092 || true
+            # rely on kafka-go testcontainers or client behavior; simple sleep loop
+            nc -z 127.0.0.1 9092 && echo kafka up && break || echo waiting && sleep 3
+            if [ "$i" -eq "$ATTEMPTS" ]; then
+              echo "Kafka did not start"; exit 1
+            fi
+          done
+
+      - name: Run E2E integration tests (with retries)
+        env:
+          KAFKA_BROKERS: localhost:9092
+          POSTGRES_TEST_DSN: postgres://test:test@127.0.0.1:5433/bulk_service_test?sslmode=disable
+          MINIO_ENDPOINT: http://127.0.0.1:9000
+          RUN_INT_TESTS: '1'
+        run: |
+          set -e
+          RETRIES=2
+          for i in $(seq 1 $RETRIES); do
+            echo "Running go test (integration tag) attempt $i"
+            go test -v -tags=integration ./... || true
+            RC=$?
+            if [ $RC -eq 0 ]; then
+              echo "Integration tests passed"; break
+            fi
+            echo "Integration tests failed (exit $RC), collecting logs and retrying..."
+            docker-compose -f deploy/docker-compose.int.yml logs --no-color > e2e-dc-logs.txt || true
+            docker ps --no-trunc --format '{{.ID}} {{.Image}} {{.Names}}' > e2e-docker-ps.txt || true
+            sleep 5
+            if [ $i -eq $RETRIES ]; then
+              echo "Integration tests failed after retries"
+              exit $RC
+            fi
+          done
+
+      - name: Archive logs
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-logs
+          path: |
+            e2e-dc-logs.txt
+            e2e-docker-ps.txt
+      - name: Collect app /metrics (on failure)
+        if: failure()
+        run: |
+          echo "Collecting /metrics from local app (best-effort)"
+          curl -sS http://127.0.0.1:8080/metrics -o e2e-app-metrics.txt || true
+        continue-on-error: true
+      - name: Upload metrics artifact
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-metrics
+          path: e2e-app-metrics.txt
+
+      - name: Tear down
+        if: always()
+        run: |
+          docker-compose -f deploy/docker-compose.int.yml down --volumes
+

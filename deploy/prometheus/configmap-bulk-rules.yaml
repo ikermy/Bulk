@@ -1,0 +1,81 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: bulk-service-prom-rules
+  namespace: monitoring
+  labels:
+    app: bulk-service
+data:
+  recording_rules.yaml: |-
+    groups:
+    - name: bulk_service_recording
+      rules:
+      - record: bulk_service:upload_p95:5m
+        expr: |
+          histogram_quantile(0.95, sum(rate(bulk_service_http_request_duration_seconds_bucket{route="/api/v1/upload"}[5m])) by (le))
+
+      - record: bulk_service:jobs_per_min:1m
+        expr: |
+          sum(rate(bulk_service_jobs_completed_total[1m])) * 60
+
+      - record: bulk_service:job_success_rate:5m
+        expr: |
+          (increase(bulk_service_jobs_completed_total[5m]) / (increase(bulk_service_jobs_completed_total[5m]) + increase(bulk_service_jobs_failed_total[5m]) + 1e-9)) * 100
+
+      - record: bulk_service:batch_p95:1h
+        expr: |
+          histogram_quantile(0.95, sum(rate(bulk_service_batch_processing_duration_seconds_bucket[1h])) by (le))
+
+      - record: bulk_service:availability_30d
+        expr: |
+          1 - (sum(increase(bulk_service_http_requests_total{status=~"5.."}[30d])) / (sum(increase(bulk_service_http_requests_total[30d])) + 1e-9))
+
+  alert_rules.yaml: |-
+    groups:
+    - name: bulk_service_alerts
+      rules:
+      - alert: BulkUploadLatencySLOViolation_Target
+        expr: bulk_service:upload_p95:5m > 5
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Upload P95 > 5s (target breach)"
+          description: "P95 upload latency is {{ $value }}s > 5s for 5m."
+
+      - alert: BulkUploadLatencySLOViolation_Critical
+        expr: bulk_service:upload_p95:5m > 10
+        for: 3m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Upload P95 > 10s (critical)"
+          description: "P95 upload latency is {{ $value }}s > 10s."
+
+      - alert: BulkProcessingRateLow_Target
+        expr: bulk_service:jobs_per_min:1m < 50
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Processing rate below target (50 jobs/min)"
+          description: "jobs/min = {{ $value }}"
+
+      - alert: BulkJobSuccessRateLow
+        expr: bulk_service:job_success_rate:5m < 98
+        for: 10m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Job success rate below 98%"
+          description: "Success rate (5m) = {{ $value }}%"
+
+      - alert: BulkBatchTooSlow
+        expr: bulk_service:batch_p95:1h > 600
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Batch completion p95 > 10min"
+          description: "Batch p95 (1h) = {{ $value }} seconds (> 600s)."
+

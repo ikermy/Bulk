@@ -1,0 +1,97 @@
+{
+  "annotations": {
+    "list": []
+  },
+  "description": "BULK SERVICE DASHBOARD — панель мониторинга для Bulk Service (processing, quality, queues)",
+  "editable": true,
+  "gnetId": null,
+  "graphTooltip": 0,
+  "id": null,
+  "iteration": 162,
+  "links": [],
+  "panels": [
+    {
+      "type": "stat",
+      "title": "MONITORING",
+      "id": 1,
+      "gridPos": {"x": 0, "y": 0, "w": 4, "h": 3},
+      "options": {
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "center",
+        "orientation": "auto",
+        "reduceOptions": {"calcs": ["last"], "fields": "", "values": false},
+        "text": {
+          "titleSize": "50%",
+          "valueSize": "200%"
+        },
+        "thresholds": {"mode": "absolute", "steps": [{"color": "#d44a3a", "value": null}, {"color": "#299c46", "value": 1}]}
+      },
+      "targets": [
+        {"expr": "1", "legendFormat": "ok", "refId": "A"}
+      ]
+    },
+
+    {"type": "stat", "title": "Batches Created (24h)", "id": 2, "gridPos": {"x": 4, "y": 0, "w": 4, "h": 3},
+      "targets": [{"expr": "increase(bulk_service_batches_created_total[24h])", "refId": "A"}],
+      "options": {"reduceOptions": {"calcs": ["last"]}}
+    },
+
+    {"type": "stat", "title": "Active Batches (processing)", "id": 3, "gridPos": {"x": 8, "y": 0, "w": 4, "h": 3},
+      "targets": [{"expr": "count(bulk_service_batch_jobs_pending > 0)", "refId": "A"}],
+      "options": {"reduceOptions": {"calcs": ["last"]}}
+    },
+
+    {"type": "stat", "title": "Completion Rate (24h)", "id": 4, "gridPos": {"x": 12, "y": 0, "w": 6, "h": 3},
+      "targets": [{"expr": "(increase(bulk_service_batches_completed_total[24h]) / ignoring(status) (increase(bulk_service_batches_created_total[24h]) + 1)) * 100", "refId": "A"}],
+      "options": {"unit": "percent(0.1)", "reduceOptions": {"calcs": ["last"]}}
+    },
+
+    {"type": "stat", "title": "Jobs Queue Size", "id": 5, "gridPos": {"x": 0, "y": 3, "w": 6, "h": 3},
+      "targets": [{"expr": "sum(bulk_service_batch_jobs_pending)", "refId": "A"}], "options": {"reduceOptions": {"calcs": ["last"]}}
+    },
+
+    {"type": "stat", "title": "Jobs / min", "id": 6, "gridPos": {"x": 6, "y": 3, "w": 6, "h": 3},
+      "targets": [{"expr": "sum(rate(bulk_service_jobs_completed_total[1m])) * 60", "refId": "A"}], "options": {"reduceOptions": {"calcs": ["last"]}}
+    },
+
+    {"type": "stat", "title": "Failure Rate (24h)", "id": 7, "gridPos": {"x": 12, "y": 3, "w": 6, "h": 3},
+      "targets": [{"expr": "(increase(bulk_service_jobs_failed_total[24h]) / (increase(bulk_service_jobs_completed_total[24h]) + increase(bulk_service_jobs_failed_total[24h]) + 1)) * 100", "refId": "A"}],
+      "options": {"unit": "percent(0.1)", "reduceOptions": {"calcs": ["last"]}}
+    },
+
+    {
+      "type": "timeseries",
+      "title": "PROCESSING LATENCY (P95)",
+      "id": 8,
+      "gridPos": {"x": 0, "y": 6, "w": 12, "h": 8},
+      "targets": [
+        {"expr": "histogram_quantile(0.95, sum(rate(bulk_service_job_processing_duration_seconds_bucket[5m])) by (le))", "refId": "A", "legendFormat": "p95"},
+        {"expr": "sum(rate(bulk_service_job_processing_duration_seconds_sum[5m])) / sum(rate(bulk_service_job_processing_duration_seconds_count[5m]))", "refId": "B", "legendFormat": "avg"}
+      ],
+      "fieldConfig": {"defaults": {"unit": "s", "min": 0, "max": 4}}
+    },
+
+    {
+      "type": "barchart",
+      "title": "VALIDATION ERRORS BY FIELD (24h)",
+      "id": 9,
+      "gridPos": {"x": 12, "y": 6, "w": 6, "h": 8},
+      "targets": [{"expr": "sum by (field) (increase(bulk_service_validation_errors_total[24h]))", "refId": "A"}],
+      "options": {"orientation": "horizontal", "showLabels": true}
+    }
+
+  ],
+  "__merged_from": "bulk_service_dashboard.json",
+  "schemaVersion": 36,
+  "style": "dark",
+  "tags": ["bulk", "service", "processing"],
+  "templating": {"list": []},
+  "time": {"from": "now-6h", "to": "now"},
+  "timepicker": {},
+  "timezone": "browser",
+  "title": "BULK SERVICE DASHBOARD",
+  "uid": "bulk-service-dashboard"
+}
+
+

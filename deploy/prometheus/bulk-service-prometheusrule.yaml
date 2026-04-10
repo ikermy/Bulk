@@ -1,0 +1,77 @@
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: bulk-service-rules
+  labels:
+    role: alert-rules
+spec:
+  groups:
+  - name: bulk-service-recording-and-alerts
+    rules:
+    # Recording rules
+    - record: bulk_service:upload_p95:5m
+      expr: |
+        histogram_quantile(0.95, sum(rate(bulk_service_http_request_duration_seconds_bucket{route="/api/v1/upload"}[5m])) by (le))
+
+    - record: bulk_service:jobs_per_min:5m
+      expr: |
+        sum(rate(bulk_service_jobs_completed_total[5m])) * 60
+
+    - record: bulk_service:job_success_rate:5m
+      expr: |
+        sum(rate(bulk_service_jobs_completed_total[5m])) / (sum(rate(bulk_service_jobs_completed_total[5m])) + sum(rate(bulk_service_jobs_failed_total[5m])))
+
+    - record: bulk_service:batch_processing_p95:5m
+      expr: |
+        histogram_quantile(0.95, sum(rate(bulk_service_batch_processing_duration_seconds_bucket[5m])) by (le))
+
+    - record: bulk_service:availability_30d
+      expr: |
+        1 - (sum(increase(bulk_service_http_requests_total{code=~"5.."}[30d])) / sum(increase(bulk_service_http_requests_total[30d])))
+
+    # Alert rules (adapted)
+    - alert: HighJobFailureRate
+      expr: |
+        (sum(rate(bulk_service_jobs_failed_total[5m])) / (sum(rate(bulk_service_jobs_completed_total[5m])) + sum(rate(bulk_service_jobs_failed_total[5m])))) > 0.05
+      for: 5m
+      labels:
+        severity: critical
+      annotations:
+        summary: "High job failure rate in Bulk Service"
+
+    - alert: BatchProcessingStuck
+      expr: |
+        time() - bulk_service_batch_last_update_timestamp > 600
+      for: 10m
+      labels:
+        severity: warning
+      annotations:
+        summary: "Batch processing appears stuck"
+
+    - alert: KafkaPublishLatencyHigh
+      expr: |
+        histogram_quantile(0.95, sum(rate(bulk_service_kafka_publish_duration_seconds_bucket[5m])) by (le)) > 1
+      for: 5m
+      labels:
+        severity: warning
+      annotations:
+        summary: "Kafka publish latency is high"
+
+    - alert: BFFRequestFailures
+      expr: |
+        sum(rate(bulk_service_bff_request_errors_total[5m])) > 0.1
+      for: 5m
+      labels:
+        severity: critical
+      annotations:
+        summary: "BFF requests failing"
+
+    - alert: HighQueueDepth
+      expr: |
+        bulk_service_kafka_queue_depth > 500
+      for: 10m
+      labels:
+        severity: warning
+      annotations:
+        summary: "Kafka queue depth is high"
+

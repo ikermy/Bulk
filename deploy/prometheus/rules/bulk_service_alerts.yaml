@@ -1,0 +1,95 @@
+groups:
+- name: bulk_service_alerts
+  rules:
+  - alert: BulkUploadLatencySLOViolation_Target
+    expr: bulk_service:upload_p95:5m > 5
+    for: 5m
+    labels:
+      severity: warning
+    annotations:
+      summary: "Upload P95 > 5s (target breach)"
+      description: "P95 upload latency is {{ $value }}s > 5s for 5m."
+
+  - alert: BulkUploadLatencySLOViolation_Critical
+    expr: bulk_service:upload_p95:5m > 10
+    for: 3m
+    labels:
+      severity: critical
+    annotations:
+      summary: "Upload P95 > 10s (critical)"
+      description: "P95 upload latency is {{ $value }}s > 10s."
+
+  - alert: BulkProcessingRateLow_Target
+    expr: bulk_service:jobs_per_min:1m < 50
+    for: 10m
+    labels:
+      severity: warning
+    annotations:
+      summary: "Processing rate below target (50 jobs/min)"
+      description: "jobs/min = {{ $value }}"
+
+  - alert: BulkJobSuccessRateLow
+    expr: bulk_service:job_success_rate:5m < 98
+    for: 10m
+    labels:
+      severity: critical
+    annotations:
+      summary: "Job success rate below 98%"
+      description: "Success rate (5m) = {{ $value }}%"
+
+  - alert: BulkBatchTooSlow
+    expr: bulk_service:batch_p95:1h > 600
+    for: 10m
+    labels:
+      severity: warning
+    annotations:
+      summary: "Batch completion p95 > 10min"
+      description: "Batch p95 (1h) = {{ $value }} seconds (> 600s)."
+
+  # Additional rules from TZ §16.2 adapted to metric names in this repo
+  - alert: HighJobFailureRate
+    expr: |
+      sum(rate(bulk_service_jobs_failed_total[5m]))
+      / (sum(rate(bulk_service_jobs_completed_total[5m])) + sum(rate(bulk_service_jobs_failed_total[5m]))) > 0.05
+    for: 5m
+    labels:
+      severity: critical
+    annotations:
+      summary: "High job failure rate in Bulk Service"
+
+  - alert: BatchProcessingStuck
+    expr: |
+      (time() - bulk_service_batch_last_update_timestamp) > 600
+    for: 10m
+    labels:
+      severity: warning
+    annotations:
+      summary: "Batch processing appears stuck"
+
+  - alert: KafkaPublishLatencyHigh
+    expr: |
+      histogram_quantile(0.95, sum(rate(bulk_service_kafka_publish_duration_seconds_bucket[5m])) by (le)) > 1
+    for: 5m
+    labels:
+      severity: warning
+    annotations:
+      summary: "Kafka publish latency is high"
+
+  - alert: BFFRequestFailures
+    expr: |
+      sum(rate(bulk_service_bff_request_errors_total[5m])) > 0.1
+    for: 5m
+    labels:
+      severity: critical
+    annotations:
+      summary: "BFF requests failing"
+
+  - alert: HighQueueDepth
+    expr: |
+      bulk_service_kafka_queue_depth > 500
+    for: 10m
+    labels:
+      severity: warning
+    annotations:
+      summary: "Kafka queue depth is high"
+

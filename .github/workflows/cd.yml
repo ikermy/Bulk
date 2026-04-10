@@ -1,0 +1,181 @@
+name: Bulk Service CD
+
+# Триггеры:
+#   - push тега v* (release): деплой в production
+#   - workflow_dispatch: ручной деплой в любой env с выбором образа
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Target environment'
+        required: true
+        default: 'staging'
+        type: choice
+        options:
+          - staging
+          - production
+      image_tag:
+        description: 'Image tag to deploy (default: latest sha)'
+        required: false
+        default: ''
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE: ghcr.io/ikermy/bulk-service
+
+jobs:
+  # ── Сборка и публикация образа (при push тега) ────────────────────────────────
+  build-release:
+    name: Build & push release image
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/v')
+    permissions:
+      contents: read
+      packages: write
+    outputs:
+      image_tag: ${{ steps.meta.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Docker meta
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.IMAGE }}
+          tags: |
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=raw,value=stable
+
+      - name: Build and push
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  # ── Деплой в staging ──────────────────────────────────────────────────────────
+  deploy-staging:
+    name: Deploy → staging
+    runs-on: ubuntu-latest
+    environment: staging
+    if: |
+      (github.event_name == 'workflow_dispatch' && github.event.inputs.environment == 'staging') ||
+      startsWith(github.ref, 'refs/tags/v')
+    needs:
+      - build-release
+    # allow running without build-release (manual dispatch with existing image)
+    continue-on-error: false
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Resolve image tag
+        id: tag
+        run: |
+          if [ -n "${{ github.event.inputs.image_tag }}" ]; then
+            echo "tag=${{ github.event.inputs.image_tag }}" >> "$GITHUB_OUTPUT"
+          elif [ "${{ github.event_name }}" == "push" ] && [ "${{ needs.build-release.outputs.image_tag }}" != "" ]; then
+            echo "tag=${{ needs.build-release.outputs.image_tag }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "tag=sha-${{ github.sha }}" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Set up kubectl (staging)
+        uses: azure/k8s-set-context@v3
+        with:
+          method: kubeconfig
+          kubeconfig: ${{ secrets.K8S_KUBECONFIG_STAGING }}
+
+      - name: Apply K8s manifests (staging)
+        run: |
+          kubectl apply -f deploy/k8s/service.yaml -n staging
+          kubectl apply -f deploy/k8s/deployment-staging.yaml -n staging
+
+      - name: Update image
+        run: |
+          IMAGE_FULL="${{ env.IMAGE }}:${{ steps.tag.outputs.tag }}"
+          echo "Deploying $IMAGE_FULL to staging"
+          kubectl set image deployment/bulk-service \
+            bulk-service="$IMAGE_FULL" \
+            -n staging
+          kubectl rollout status deployment/bulk-service -n staging --timeout=120s
+
+      - name: Verify deployment
+        run: |
+          kubectl get pods -n staging -l app=bulk-service
+          kubectl rollout status deployment/bulk-service -n staging
+
+  # ── Деплой в production ───────────────────────────────────────────────────────
+  deploy-production:
+    name: Deploy → production
+    runs-on: ubuntu-latest
+    environment: production  # требует ручного подтверждения (GitHub Environment Protection)
+    if: |
+      (github.event_name == 'workflow_dispatch' && github.event.inputs.environment == 'production') ||
+      startsWith(github.ref, 'refs/tags/v')
+    needs:
+      - build-release
+      - deploy-staging
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Resolve image tag
+        id: tag
+        run: |
+          if [ -n "${{ github.event.inputs.image_tag }}" ]; then
+            echo "tag=${{ github.event.inputs.image_tag }}" >> "$GITHUB_OUTPUT"
+          elif [ "${{ needs.build-release.outputs.image_tag }}" != "" ]; then
+            echo "tag=${{ needs.build-release.outputs.image_tag }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "tag=sha-${{ github.sha }}" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Set up kubectl (production)
+        uses: azure/k8s-set-context@v3
+        with:
+          method: kubeconfig
+          kubeconfig: ${{ secrets.K8S_KUBECONFIG_PROD }}
+
+      - name: Apply K8s manifests (production)
+        run: |
+          kubectl apply -f deploy/k8s/service.yaml -n production
+          kubectl apply -f deploy/k8s/hpa-prod.yaml -n production
+          kubectl apply -f deploy/k8s/pdb-prod.yaml -n production
+          kubectl apply -f deploy/k8s/deployment-prod.yaml -n production
+
+      - name: Update image
+        run: |
+          IMAGE_FULL="${{ env.IMAGE }}:${{ steps.tag.outputs.tag }}"
+          echo "Deploying $IMAGE_FULL to production"
+          kubectl set image deployment/bulk-service \
+            bulk-service="$IMAGE_FULL" \
+            -n production
+          kubectl rollout status deployment/bulk-service -n production --timeout=180s
+
+      - name: Verify deployment
+        run: |
+          kubectl get pods -n production -l app=bulk-service
+          kubectl rollout status deployment/bulk-service -n production
+
+      - name: Tag stable image
+        if: success()
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+

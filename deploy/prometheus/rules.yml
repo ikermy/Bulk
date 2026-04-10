@@ -1,0 +1,123 @@
+groups:
+  - name: bulk-service-alerts
+    rules:
+      - record: bulk_service:errors_total:30d
+        expr: 'sum(increase(bulk_service_http_requests_total{status=~"5.."}[30d]))'
+      - record: bulk_service:requests_total:30d
+        expr: 'sum(increase(bulk_service_http_requests_total[30d]))'
+      - record: bulk_service:request_error_ratio:30d
+        expr: '1 - (bulk_service:errors_total:30d / bulk_service:requests_total:30d)'
+      - record: bulk_service:kafka_publish_success_total:30d
+        expr: 'sum(increase(bulk_service_kafka_publish_total{result="success"}[30d]))'
+      - record: bulk_service:kafka_publish_total:30d
+        expr: 'sum(increase(bulk_service_kafka_publish_total[30d]))'
+      - record: bulk_service:kafka_publish_success_ratio:30d
+        expr: 'bulk_service:kafka_publish_success_total:30d / bulk_service:kafka_publish_total:30d'
+      - record: bulk_service:latency_p95:5m
+        expr: 'histogram_quantile(0.95, sum(rate(bulk_service_http_request_duration_seconds_bucket[5m])) by (le, route))'
+      - record: bulk_service:request_error_ratio:1h
+        expr: 'sum(increase(bulk_service_http_requests_total{status=~"5.."}[1h])) / sum(increase(bulk_service_http_requests_total[1h]))'
+      - alert: HighJobFailureRate
+        expr: sum(rate(bulk_service_jobs_failed_total[5m])) / sum(rate(bulk_service_jobs_completed_total[5m])) > 0.05
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: High job failure rate in Bulk Service
+          description: Job failure ratio exceeded 5% over the last 5 minutes.
+      - alert: BatchProcessingStuck
+        expr: time() - bulk_service_batch_last_update_timestamp > 600
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: Batch processing appears stuck
+          description: A batch has not been updated for more than 10 minutes.
+      - alert: KafkaPublishLatencyHigh
+        expr: histogram_quantile(0.95, rate(bulk_service_kafka_publish_duration_seconds_bucket[5m])) > 1
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: Kafka publish latency is high
+          description: P95 Kafka publish latency exceeded 1 second.
+      - alert: BFFRequestFailures
+        expr: sum(rate(bulk_service_bff_request_errors_total[5m])) > 0.1
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: BFF requests failing
+          description: BFF request error rate exceeded 0.1 errors/sec.
+      - alert: HighQueueDepth
+        expr: bulk_service_kafka_queue_depth > 500
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: Kafka queue depth is high
+          description: Kafka queue depth exceeded 500 messages.
+      - alert: HighErrorRate
+        expr: sum(rate(bulk_service_http_requests_total{status=~"5.."}[5m])) by (route) > 1
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: High error rate on route {{ $labels.route }}
+          description: More than 1 error/sec on route {{ $labels.route }} for >2m
+      - alert: HighP95Latency
+        expr: histogram_quantile(0.95, sum(rate(bulk_service_http_request_duration_seconds_bucket[5m])) by (le, route)) > 1
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: High P95 latency on route {{ $labels.route }}
+          description: P95 greater than 1s for route {{ $labels.route }}
+      - alert: KafkaPublishErrors
+        expr: sum(rate(bulk_service_kafka_publish_total{result!="success"}[5m])) by (topic) > 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: Kafka publish errors for topic {{ $labels.topic }}
+          description: Non-successful kafka publish detected for topic {{ $labels.topic }}
+      - alert: JobsBacklog
+        expr: sum(bulk_service_batch_jobs_pending) by (batch_id) > 100
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: High jobs backlog for batch {{ $labels.batch_id }}
+          description: Number of pending jobs for batch {{ $labels.batch_id }} is high (>100)
+      - alert: StorageErrors
+        expr: sum(rate(bulk_service_storage_errors_total[5m])) by (operation) > 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: Storage operation errors
+          description: Storage errors observed for operation {{ $labels.operation }}
+      - alert: StorageErrorRateHigh
+        expr: (sum(increase(bulk_service_storage_errors_total[30d])) by (operation) / sum(increase(bulk_service_storage_operations_total[30d])) by (operation)) > 0.0001
+        for: 1h
+        labels:
+          severity: critical
+        annotations:
+          summary: High storage error rate for operation {{ $labels.operation }}
+          description: Storage error ratio exceeded 0.01% over the last 30d for operation {{ $labels.operation }}
+      - alert: DBConnectionsHigh
+        expr: bulk_service_db_open_connections > 100
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: High DB connections
+          description: Open DB connections exceed 100
+      - alert: HighErrorBurnRate
+        expr: 'bulk_service:request_error_ratio:1h > 0.005'
+        for: 15m
+        labels:
+          severity: critical
+        annotations:
+          summary: High error burn rate detected
+          description: 'Error ratio over the last 1h is > 0.5% (possible burn of SLO error budget). Check recent deploys and traffic.'

@@ -1,0 +1,15 @@
+passportNumber:
+  pattern: "^[A-Z0-9]{6,10}$"
+  minLength: 6
+  maxLength: 10
+  required: true
+
+fullName:
+  minLength: 2
+  maxLength: 200
+  required: true
+
+birthDate:
+  pattern: "^\\d{4}-\\d{2}-\\d{2}$"
+  required: false
+

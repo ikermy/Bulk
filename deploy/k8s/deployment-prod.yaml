@@ -1,0 +1,119 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: bulk-service
+  labels:
+    app: bulk-service
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: bulk-service
+  template:
+    metadata:
+      labels:
+        app: bulk-service
+    spec:
+      containers:
+      - name: bulk-service
+        # Образ обновляется CI/CD: kubectl set image ... bulk-service=ghcr.io/ikermy/bulk-service:<tag>
+        image: ghcr.io/ikermy/bulk-service:stable
+        imagePullPolicy: IfNotPresent
+        ports:
+        - containerPort: 8080
+        env:
+        # ── Секреты (из bulk-service-secrets) ───────────────────────────────
+        - name: DATABASE_URL
+          valueFrom:
+            secretKeyRef:
+              name: bulk-service-secrets
+              key: database-url
+        - name: BFF_SERVICE_TOKEN
+          valueFrom:
+            secretKeyRef:
+              name: bulk-service-secrets
+              key: bff-service-token
+        - name: AUTH_JWKS_URL
+          valueFrom:
+            secretKeyRef:
+              name: bulk-service-secrets
+              key: auth-jwks-url
+        - name: KAFKA_BROKERS
+          valueFrom:
+            secretKeyRef:
+              name: bulk-service-secrets
+              key: kafka-brokers
+        - name: REDIS_URL
+          valueFrom:
+            secretKeyRef:
+              name: bulk-service-secrets
+              key: redis-url
+        - name: STORAGE_ENDPOINT
+          valueFrom:
+            secretKeyRef:
+              name: bulk-service-secrets
+              key: storage-endpoint
+        - name: STORAGE_ACCESS_KEY
+          valueFrom:
+            secretKeyRef:
+              name: bulk-service-secrets
+              key: storage-access-key
+        - name: STORAGE_SECRET_KEY
+          valueFrom:
+            secretKeyRef:
+              name: bulk-service-secrets
+              key: storage-secret-key
+        # ── Нечувствительные конфиги ─────────────────────────────────────────
+        - name: BFF_URL
+          value: "http://barcode-bff:8080"
+        - name: LOG_LEVEL
+          value: "info"
+        - name: LOG_FORMAT
+          value: "json"
+        - name: SERVICE_NAME
+          value: "bulk-service"
+        - name: MAX_FILE_SIZE_MB
+          value: "10"
+        - name: MAX_ROWS_PER_BATCH
+          value: "1000"
+        - name: RATE_LIMIT_RPS
+          value: "10"
+        - name: STORAGE_USE_SSL
+          value: "true"
+        - name: STORAGE_BUCKET
+          value: "bulk-files"
+        resources:
+          requests:
+            cpu: "2000m"
+            memory: "2Gi"
+          limits:
+            cpu: "2000m"
+            memory: "2Gi"
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 8080
+          initialDelaySeconds: 15
+          periodSeconds: 10
+          timeoutSeconds: 2
+          failureThreshold: 5
+        readinessProbe:
+          httpGet:
+            path: /ready
+            port: 8080
+          initialDelaySeconds: 10
+          periodSeconds: 5
+          timeoutSeconds: 2
+          failureThreshold: 3
+        startupProbe:
+          httpGet:
+            path: /ready
+            port: 8080
+          failureThreshold: 20
+          periodSeconds: 5
+        securityContext:
+          runAsNonRoot: true
+          runAsUser: 1000
+          readOnlyRootFilesystem: true
+          allowPrivilegeEscalation: false
+      terminationGracePeriodSeconds: 60
