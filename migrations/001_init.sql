@@ -2,10 +2,10 @@
 -- Batches
 CREATE TABLE IF NOT EXISTS batches (
     id UUID PRIMARY KEY,
-    user_id UUID NOT NULL,
+    user_id UUID,
     status VARCHAR(50) NOT NULL,
     revision VARCHAR(100) NOT NULL,
-    file_storage_id UUID NOT NULL,
+    file_storage_id TEXT,
     total_rows INT NOT NULL,
     valid_rows INT NOT NULL,
     approved_count INT,

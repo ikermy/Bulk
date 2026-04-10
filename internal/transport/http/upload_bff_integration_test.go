@@ -86,7 +86,7 @@ func TestUpload_ReadyFlow(t *testing.T) {
 	validator := validation.NewBFFValidator(bff.URL, 2*time.Second, "")
 	billingClient := bill.NewBFFBillingClient(bff.URL, 2*time.Second, "")
 	svc := bulk.NewService(nil, nil, validator, billingClient, nil, nil)
-	deps := &di.Deps{Service: svc}
+	deps := &di.Deps{Service: svc, BillingClient: billingClient}
 
 	// set env token before NewRouter
 	os.Setenv("INTERNAL_SERVICE_JWT", "test-token")
@@ -142,7 +142,7 @@ func TestUpload_PartialFlow(t *testing.T) {
 	validator := validation.NewBFFValidator(bff.URL, 2*time.Second, "")
 	billingClient := bill.NewBFFBillingClient(bff.URL, 2*time.Second, "")
 	svc := bulk.NewService(nil, nil, validator, billingClient, nil, nil)
-	deps := &di.Deps{Service: svc}
+	deps := &di.Deps{Service: svc, BillingClient: billingClient}
 
 	os.Setenv("INTERNAL_SERVICE_JWT", "test-token")
 	defer os.Unsetenv("INTERNAL_SERVICE_JWT")
@@ -152,20 +152,25 @@ func TestUpload_PartialFlow(t *testing.T) {
 	defer srv.Close()
 
 	resp, body := doUpload(t, srv.URL, "first_name,last_name\nval1,val2\nval2,val2\nval3,val3\nval4,val4\nval5,val5", "rev1")
-	if resp.StatusCode != http.StatusOK {
-		t.Fatalf("expected 200, got %d body=%s", resp.StatusCode, string(body))
+	// partial_available is returned as 402 Payment Required per TZ §10.1
+	if resp.StatusCode != http.StatusPaymentRequired {
+		t.Fatalf("expected 402, got %d body=%s", resp.StatusCode, string(body))
 	}
 	var out map[string]any
 	if err := json.Unmarshal(body, &out); err != nil {
 		t.Fatalf("json decode: %v", err)
 	}
-	if out["status"] != "partial_available" {
-		t.Fatalf("expected status partial_available, got %v", out["status"])
+	if out["code"] != "PARTIAL_AVAILABLE" {
+		t.Fatalf("expected code PARTIAL_AVAILABLE, got %v", out["code"])
 	}
-	// options.generatePartial exists
-	opt, ok := out["options"].(map[string]any)
+	// options are in details.options
+	details, ok := out["details"].(map[string]any)
 	if !ok {
-		t.Fatalf("options missing: %v", out)
+		t.Fatalf("details missing: %v", out)
+	}
+	opt, ok := details["options"].(map[string]any)
+	if !ok {
+		t.Fatalf("options missing in details: %v", details)
 	}
 	if _, ok := opt["generatePartial"].(map[string]any); !ok {
 		t.Fatalf("generatePartial missing: %v", opt)

@@ -6,8 +6,10 @@ package http
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"mime/multipart"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -16,6 +18,8 @@ import (
 	"testing"
 	"time"
 
+	container "github.com/moby/moby/api/types/container"
+	"github.com/moby/moby/api/types/network"
 	tc "github.com/testcontainers/testcontainers-go"
 	"github.com/testcontainers/testcontainers-go/wait"
 
@@ -204,10 +208,10 @@ func TestE2E_FullFlow(t *testing.T) {
 	var reader *kgo.Reader
 	received := make(chan kgo.Message, 100)
 	if useKafka {
-		// Decide which kafka image to use. Default to Bitnami unless overridden.
+		// Decide which kafka image to use. Default to apache/kafka unless overridden.
 		kafkaImg := os.Getenv("KAFKA_TEST_IMAGE")
 		if kafkaImg == "" {
-			kafkaImg = "bitnami/kafka:3.5.1"
+			kafkaImg = "apache/kafka:3.7.0"
 		}
 		t.Logf("selected KAFKA_TEST_IMAGE=%s", kafkaImg)
 
@@ -250,14 +254,14 @@ func TestE2E_FullFlow(t *testing.T) {
 					useKafka = false
 				} else {
 					defer kafkaCont.Terminate(ctx)
-				host, _ := kafkaCont.Host(ctx)
-				mp, _ := kafkaCont.MappedPort(ctx, "9092/tcp")
-				kafkaBroker = host + ":" + mp.Port()
-				t.Logf("kafka broker: %s", kafkaBroker)
+					host, _ := kafkaCont.Host(ctx)
+					mp, _ := kafkaCont.MappedPort(ctx, "9092/tcp")
+					kafkaBroker = host + ":" + mp.Port()
+					t.Logf("kafka broker: %s", kafkaBroker)
 
-				// create topic
-				dialCtx, dialCancel := context.WithTimeout(ctx, 30*time.Second)
-				defer dialCancel()
+					// create topic
+					dialCtx, dialCancel := context.WithTimeout(ctx, 30*time.Second)
+					defer dialCancel()
 					conn, err := kgo.DialContext(dialCtx, "tcp", kafkaBroker)
 					if err == nil {
 						topic := os.Getenv("KAFKA_TOPIC_BULK_JOB")
@@ -290,31 +294,79 @@ func TestE2E_FullFlow(t *testing.T) {
 				}
 			}
 		} else {
-			// For Bitnami and other non-Confluent images, run a single kafka container without zookeeper
-			kafkaReq := tc.ContainerRequest{
-				Image:        kafkaImg,
-				ExposedPorts: []string{"9092/tcp"},
-				Env: map[string]string{
-					"ALLOW_PLAINTEXT_LISTENER": "yes",
-				},
-				WaitingFor: wait.ForListeningPort("9092/tcp").WithStartupTimeout(120 * time.Second),
-			}
-			kafkaCont, err := tc.GenericContainer(ctx, tc.GenericContainerRequest{ContainerRequest: kafkaReq, Started: true})
-			if err != nil {
-				t.Logf("failed to start kafka container, skipping kafka roundtrip: %v", err)
-				useKafka = false
-			} else {
-				defer kafkaCont.Terminate(ctx)
-				// dump logs on failure later by collecting from kafkaCont
-			host, _ := kafkaCont.Host(ctx)
-			mp, _ := kafkaCont.MappedPort(ctx, "9092/tcp")
-			kafkaBroker = host + ":" + mp.Port()
-				t.Logf("kafka broker: %s", kafkaBroker)
+			// For apache/kafka and other non-Confluent images: single container in KRaft mode.
+			isApache := strings.Contains(strings.ToLower(kafkaImg), "apache/kafka")
 
-				// create topic with retries similar to bitnami test
-				dialCtx, dialCancel := context.WithTimeout(ctx, 30*time.Second)
-				defer dialCancel()
-				conn, err := kgo.DialContext(dialCtx, "tcp", kafkaBroker)
+			// Find a free host port so advertised listener matches the mapped port.
+			var hostPort int
+			if isApache {
+				l, err := net.Listen("tcp", "127.0.0.1:0")
+				if err != nil {
+					t.Logf("could not find free port, skipping kafka roundtrip: %v", err)
+					useKafka = false
+				} else {
+					hostPort = l.Addr().(*net.TCPAddr).Port
+					l.Close()
+					t.Logf("binding kafka to host port %d", hostPort)
+				}
+			}
+
+			var env map[string]string
+			var waitStrategy wait.Strategy
+			if isApache {
+				env = map[string]string{
+					"KAFKA_NODE_ID":                          "1",
+					"KAFKA_PROCESS_ROLES":                    "broker,controller",
+					"KAFKA_LISTENERS":                        "PLAINTEXT://0.0.0.0:9092,CONTROLLER://0.0.0.0:9093",
+					"KAFKA_ADVERTISED_LISTENERS":             fmt.Sprintf("PLAINTEXT://localhost:%d", hostPort),
+					"KAFKA_LISTENER_SECURITY_PROTOCOL_MAP":   "CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT",
+					"KAFKA_CONTROLLER_QUORUM_VOTERS":         "1@localhost:9093",
+					"KAFKA_CONTROLLER_LISTENER_NAMES":        "CONTROLLER",
+					"CLUSTER_ID":                             "MkU3OEVBNTcwNTJENDM2Qk",
+					"KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR": "1",
+				}
+				waitStrategy = wait.ForLog("Kafka Server started").WithStartupTimeout(120 * time.Second)
+			} else {
+				env = map[string]string{"ALLOW_PLAINTEXT_LISTENER": "yes"}
+				waitStrategy = wait.ForListeningPort("9092/tcp").WithStartupTimeout(120 * time.Second)
+			}
+
+			if useKafka {
+				kafkaReq := tc.ContainerRequest{
+					Image:        kafkaImg,
+					ExposedPorts: []string{"9092/tcp"},
+					Env:          env,
+					HostConfigModifier: func(hc *container.HostConfig) {
+						if isApache {
+							port, _ := network.ParsePort("9092/tcp")
+							hc.PortBindings = network.PortMap{
+								port: []network.PortBinding{{HostPort: fmt.Sprintf("%d", hostPort)}},
+							}
+						}
+					},
+					WaitingFor: waitStrategy,
+				}
+				kafkaCont, err := tc.GenericContainer(ctx, tc.GenericContainerRequest{ContainerRequest: kafkaReq, Started: true})
+				if err != nil {
+					t.Logf("failed to start kafka container, skipping kafka roundtrip: %v", err)
+					useKafka = false
+				} else {
+					defer kafkaCont.Terminate(ctx)
+
+					// Determine broker address
+					if isApache {
+						kafkaBroker = fmt.Sprintf("localhost:%d", hostPort)
+					} else {
+						host, _ := kafkaCont.Host(ctx)
+						mp, _ := kafkaCont.MappedPort(ctx, "9092/tcp")
+						kafkaBroker = host + ":" + mp.Port()
+					}
+					t.Logf("kafka broker: %s", kafkaBroker)
+
+					// create topic with retries
+					dialCtx, dialCancel := context.WithTimeout(ctx, 30*time.Second)
+					defer dialCancel()
+					conn, err := kgo.DialContext(dialCtx, "tcp", kafkaBroker)
 					if err == nil {
 						topic := os.Getenv("KAFKA_TOPIC_BULK_JOB")
 						if topic == "" {
@@ -323,24 +375,25 @@ func TestE2E_FullFlow(t *testing.T) {
 						_ = conn.CreateTopics(kgo.TopicConfig{Topic: topic, NumPartitions: 1, ReplicationFactor: 1})
 						_ = conn.Close()
 					} else {
-					t.Logf("warning: could not dial kafka to create topic: %v", err)
-				}
-
-				// start reader
-				topic := os.Getenv("KAFKA_TOPIC_BULK_JOB")
-				if topic == "" {
-					topic = "bulk.job"
-				}
-				reader = kgo.NewReader(kgo.ReaderConfig{Brokers: []string{kafkaBroker}, Topic: topic, GroupID: "e2e-group"})
-				go func() {
-					for {
-						m, err := reader.ReadMessage(context.Background())
-						if err != nil {
-							return
-						}
-						received <- m
+						t.Logf("warning: could not dial kafka to create topic: %v", err)
 					}
-				}()
+
+					// start reader
+					topic := os.Getenv("KAFKA_TOPIC_BULK_JOB")
+					if topic == "" {
+						topic = "bulk.job"
+					}
+					reader = kgo.NewReader(kgo.ReaderConfig{Brokers: []string{kafkaBroker}, Topic: topic, GroupID: "e2e-group"})
+					go func() {
+						for {
+							m, err := reader.ReadMessage(context.Background())
+							if err != nil {
+								return
+							}
+							received <- m
+						}
+					}()
+				}
 			}
 		}
 	}

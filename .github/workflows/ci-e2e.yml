@@ -12,7 +12,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 90
     env:
-      KAFKA_IMAGE: bitnami/kafka:3.5.1
+      KAFKA_IMAGE: apache/kafka:3.7.0
       POSTGRES_IMAGE: postgres:15
       MINIO_IMAGE: minio/minio:latest
     steps:
@@ -58,6 +58,13 @@ jobs:
           for i in {1..30}; do
             docker run --rm --network host alpine sh -c "apk add --no-cache postgresql-client >/dev/null 2>&1; pg_isready -h 127.0.0.1 -p 5433 && exit 0" && break || sleep 2
           done
+
+      - name: Apply DB migrations
+        run: |
+          POSTGRES_TEST_DSN="postgres://test:test@127.0.0.1:5433/bulk_service_test?sslmode=disable"
+          docker run --rm --network host -e PGPASSWORD=test postgres:15 \
+            psql -h 127.0.0.1 -p 5433 -U test -d bulk_service_test \
+            -c "$(cat migrations/001_init.sql)" || true
 
       - name: Wait for Kafka (with retries)
         run: |

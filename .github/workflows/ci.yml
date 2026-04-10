@@ -165,7 +165,7 @@ jobs:
             echo "Loading Kafka image from cache"
             docker load -i .github/docker-cache/kafka-image.tar
           else
-            IMAGE=bitnami/kafka:3.5.1
+            IMAGE=apache/kafka:3.7.0
             echo "Pulling $IMAGE"
             docker pull $IMAGE
             docker save $IMAGE -o .github/docker-cache/kafka-image.tar

@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/ikermy/Bulk/internal/db"
 )
 
@@ -18,7 +19,7 @@ func TestPostgresIntegration_CreateAndGet(t *testing.T) {
 	if dsn == "" {
 		t.Skip("POSTGRES_TEST_DSN not set")
 	}
-	db, err := db.Connect(dsn)
+	dbConn, err := db.Connect(dsn)
 	if err != nil {
 		t.Fatalf("db connect: %v", err)
 	}
@@ -26,12 +27,14 @@ func TestPostgresIntegration_CreateAndGet(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	repo := NewBatchRepository(db)
-	b := &Batch{ID: "itest-1", UserID: "u", Status: "pending", Revision: "r", TotalRows: 1, ValidRows: 1}
+	repo := NewBatchRepository(dbConn)
+	batchID := uuid.New().String()
+	userID := uuid.New().String()
+	b := &Batch{ID: batchID, UserID: userID, Status: "pending", Revision: "r", TotalRows: 1, ValidRows: 1}
 	if err := repo.Create(ctx, b); err != nil {
 		t.Fatalf("create failed: %v", err)
 	}
-	got, err := repo.GetByID(ctx, "itest-1")
+	got, err := repo.GetByID(ctx, batchID)
 	if err != nil {
 		t.Fatalf("get failed: %v", err)
 	}

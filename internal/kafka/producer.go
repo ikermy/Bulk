@@ -53,8 +53,9 @@ func (a *writerAdapter) Close() error { return a.w.Close() }
 var newKafkaWriter = func(brokers []string, topic string) writerIface {
 	// Use explicit Writer construction to avoid deprecated NewWriter/WriterConfig usage.
 	w := &kafka.Writer{
-		Addr:  kafka.TCP(brokers...),
-		Topic: topic,
+		Addr:                     kafka.TCP(brokers...),
+		Topic:                    topic,
+		AllowAutoTopicCreation:   true,
 	}
 	return &writerAdapter{w: w}
 }

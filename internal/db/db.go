@@ -5,7 +5,7 @@ import (
 	"time"
 
 	"github.com/ikermy/Bulk/internal/metrics"
-	_ "github.com/lib/pq" // postgres driver
+	_ "github.com/lib/pq" // register postgres driver
 )
 
 func Connect(databaseURL string) (*sql.DB, error) {

@@ -132,10 +132,18 @@ func TestE2E_Upload_SaveAndDBUpdate(t *testing.T) {
     os.Setenv("STORAGE_USE_SSL", "false")
     os.Setenv("STORAGE_BASE_URL", "http://"+endpoint)
 
-    // create storage client
-    sc, err := storage.NewFileClientFromEnv()
+    // create storage client with retries — MinIO may need a moment to fully initialize
+    // even after the port is listening
+    var sc *storage.FileClient
+    for attempt := 0; attempt < 15; attempt++ {
+        sc, err = storage.NewFileClientFromEnv()
+        if err == nil {
+            break
+        }
+        time.Sleep(500 * time.Millisecond)
+    }
     if err != nil {
-        t.Fatalf("storage init failed: %v", err)
+        t.Fatalf("storage init failed after retries: %v", err)
     }
 
     // prepare repos and service

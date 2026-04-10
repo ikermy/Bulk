@@ -44,7 +44,7 @@ func TestIntegration_Upload_Multipart(t *testing.T) {
     if err != nil {
         t.Fatalf("create form file: %v", err)
     }
-    _, _ = io.Copy(fw, strings.NewReader("col1,col2\nval1,val2\n"))
+	_, _ = io.Copy(fw, strings.NewReader("first_name,last_name\nval1,val2\n"))
     _ = w.WriteField("revision", "rev-integ")
     w.Close()
 

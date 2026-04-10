@@ -65,9 +65,17 @@ func (r *BatchRepository) GetByID(ctx context.Context, id string) (*Batch, error
 	row := r.db.QueryRowContext(ctx, "SELECT id,user_id,status,revision,file_storage_id,total_rows,valid_rows,approved_count,completed_count,failed_count,created_at,completed_at,transaction_ids FROM batches WHERE id=$1", id)
 	var completedAt sql.NullTime
 	var txNull sql.NullString
-	err := row.Scan(&b.ID, &b.UserID, &b.Status, &b.Revision, &b.FileStorageID, &b.TotalRows, &b.ValidRows, &b.ApprovedCount, &b.CompletedCount, &b.FailedCount, &b.CreatedAt, &completedAt, &txNull)
+	var userIDNull sql.NullString
+	var fileStorageNull sql.NullString
+	err := row.Scan(&b.ID, &userIDNull, &b.Status, &b.Revision, &fileStorageNull, &b.TotalRows, &b.ValidRows, &b.ApprovedCount, &b.CompletedCount, &b.FailedCount, &b.CreatedAt, &completedAt, &txNull)
 	if err != nil {
 		return nil, err
+	}
+	if userIDNull.Valid {
+		b.UserID = userIDNull.String
+	}
+	if fileStorageNull.Valid {
+		b.FileStorageID = fileStorageNull.String
 	}
 	if completedAt.Valid {
 		b.CompletedAt = completedAt.Time
@@ -189,8 +197,16 @@ func (r *BatchRepository) ListWithFilters(ctx context.Context, status string, us
 		var b Batch
 		var completedAt sql.NullTime
 		var txNull sql.NullString
-		if err := rows.Scan(&b.ID, &b.UserID, &b.Status, &b.Revision, &b.FileStorageID, &b.TotalRows, &b.ValidRows, &b.ApprovedCount, &b.CompletedCount, &b.FailedCount, &b.CreatedAt, &completedAt, &txNull); err != nil {
+		var userIDNull sql.NullString
+		var fileStorageNull sql.NullString
+		if err := rows.Scan(&b.ID, &userIDNull, &b.Status, &b.Revision, &fileStorageNull, &b.TotalRows, &b.ValidRows, &b.ApprovedCount, &b.CompletedCount, &b.FailedCount, &b.CreatedAt, &completedAt, &txNull); err != nil {
 			return nil, 0, err
+		}
+		if userIDNull.Valid {
+			b.UserID = userIDNull.String
+		}
+		if fileStorageNull.Valid {
+			b.FileStorageID = fileStorageNull.String
 		}
 		if completedAt.Valid {
 			b.CompletedAt = completedAt.Time

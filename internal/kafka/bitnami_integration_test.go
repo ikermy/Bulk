@@ -7,16 +7,48 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"net"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
+	container "github.com/moby/moby/api/types/container"
+	"github.com/moby/moby/api/types/network"
 	kgo "github.com/segmentio/kafka-go"
 	tc "github.com/testcontainers/testcontainers-go"
 	"github.com/testcontainers/testcontainers-go/wait"
 )
 
-// This is a minimal integration test that starts a Kafka container (bitnami by default),
+// apacheKafkaEnv returns the KRaft environment variables for apache/kafka image.
+// advertisedPort is the host port that will be mapped to container's 9092.
+func apacheKafkaEnv(advertisedPort int) map[string]string {
+	return map[string]string{
+		"KAFKA_NODE_ID":                          "1",
+		"KAFKA_PROCESS_ROLES":                    "broker,controller",
+		"KAFKA_LISTENERS":                        "PLAINTEXT://0.0.0.0:9092,CONTROLLER://0.0.0.0:9093",
+		"KAFKA_ADVERTISED_LISTENERS":             fmt.Sprintf("PLAINTEXT://localhost:%d", advertisedPort),
+		"KAFKA_LISTENER_SECURITY_PROTOCOL_MAP":   "CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT",
+		"KAFKA_CONTROLLER_QUORUM_VOTERS":         "1@localhost:9093",
+		"KAFKA_CONTROLLER_LISTENER_NAMES":        "CONTROLLER",
+		"CLUSTER_ID":                             "MkU3OEVBNTcwNTJENDM2Qk",
+		"KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR": "1",
+	}
+}
+
+// freeTCPPort returns an available TCP port on localhost.
+func freeTCPPort(t *testing.T) int {
+	t.Helper()
+	l, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("could not find free port: %v", err)
+	}
+	port := l.Addr().(*net.TCPAddr).Port
+	l.Close()
+	return port
+}
+
+// This is a minimal integration test that starts a Kafka container (apache/kafka by default),
 // produces and consumes a single message. The test is skipped unless RUN_INT_TESTS=1.
 // If the test fails, container logs are collected and emitted via t.Logf for debugging.
 func TestKafka_BitnamiMinimal(t *testing.T) {
@@ -28,18 +60,40 @@ func TestKafka_BitnamiMinimal(t *testing.T) {
 
 	img := os.Getenv("KAFKA_TEST_IMAGE")
 	if img == "" {
-		img = "bitnami/kafka:3.5.1"
+		img = "apache/kafka:3.7.0"
 	}
 	t.Logf("using KAFKA_TEST_IMAGE=%s", img)
+
+	isApache := strings.Contains(img, "apache/kafka")
+
+	// Find a free host port so that the advertised listener matches the mapped port.
+	hostPort := freeTCPPort(t)
+	t.Logf("binding kafka to host port %d", hostPort)
+
+	var env map[string]string
+	var waitFor wait.Strategy
+	if isApache {
+		env = apacheKafkaEnv(hostPort)
+		waitFor = wait.ForLog("Kafka Server started").WithStartupTimeout(120 * time.Second)
+	} else {
+		env = map[string]string{"ALLOW_PLAINTEXT_LISTENER": "yes"}
+		waitFor = wait.ForListeningPort("9092/tcp").WithStartupTimeout(120 * time.Second)
+	}
 
 	req := tc.GenericContainerRequest{
 		ContainerRequest: tc.ContainerRequest{
 			Image:        img,
 			ExposedPorts: []string{"9092/tcp"},
-			Env: map[string]string{
-				"ALLOW_PLAINTEXT_LISTENER": "yes",
+			Env:          env,
+			HostConfigModifier: func(hc *container.HostConfig) {
+				if isApache {
+					port, _ := network.ParsePort("9092/tcp")
+					hc.PortBindings = network.PortMap{
+						port: []network.PortBinding{{HostPort: fmt.Sprintf("%d", hostPort)}},
+					}
+				}
 			},
-			WaitingFor: wait.ForListeningPort("9092/tcp").WithStartupTimeout(120 * time.Second),
+			WaitingFor: waitFor,
 		},
 		Started: true,
 	}
@@ -67,15 +121,22 @@ func TestKafka_BitnamiMinimal(t *testing.T) {
 		}
 	}()
 
-	host, err := cont.Host(ctx)
-	if err != nil {
-		t.Fatalf("failed to get container host: %v", err)
+	// Determine broker address.
+	var addr string
+	if isApache {
+		addr = fmt.Sprintf("localhost:%d", hostPort)
+	} else {
+		host, err := cont.Host(ctx)
+		if err != nil {
+			t.Fatalf("failed to get container host: %v", err)
+		}
+		mp, err := cont.MappedPort(ctx, "9092/tcp")
+		if err != nil {
+			t.Fatalf("failed to get mapped port: %v", err)
+		}
+		addr = fmt.Sprintf("%s:%s", host, mp.Port())
 	}
-	mp, err := cont.MappedPort(ctx, "9092/tcp")
-	if err != nil {
-		t.Fatalf("failed to get mapped port: %v", err)
-	}
-	addr := fmt.Sprintf("%s:%s", host, mp.Port())
+	t.Logf("kafka broker addr: %s", addr)
 
 	topic := "int_test_topic"
 
