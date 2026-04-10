@@ -13,7 +13,6 @@ jobs:
     timeout-minutes: 90
     env:
       KAFKA_IMAGE: bitnami/kafka:3.5.1
-      ZOOKEEPER_IMAGE: bitnami/zookeeper:3.9
       POSTGRES_IMAGE: postgres:15
       MINIO_IMAGE: minio/minio:latest
     steps:
@@ -42,7 +41,6 @@ jobs:
       - name: Pull dependent images
         run: |
           docker pull $KAFKA_IMAGE || true
-          docker pull $ZOOKEEPER_IMAGE || true
           docker pull $POSTGRES_IMAGE || true
           docker pull $MINIO_IMAGE || true
           # save kafka image for next runs (best-effort)

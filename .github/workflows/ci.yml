@@ -136,7 +136,7 @@ jobs:
           RUN_INT_TESTS: 1
           POSTGRES_TEST_DSN: "postgres://test:test@localhost:5433/bulk_service_test?sslmode=disable"
         run: |
-          docker compose -f deploy/docker-compose.int.yml up -d zookeeper kafka
+          docker compose -f deploy/docker-compose.int.yml up -d kafka
           for i in {1..30}; do nc -z localhost 9092 && break || sleep 1; done
           go test -tags=integration ./internal/kafka -v || true
           go test ./internal/adapters/postgres -v
@@ -172,7 +172,7 @@ jobs:
           fi
       - name: Start integration services
         run: |
-          docker compose -f deploy/docker-compose.int.yml up -d postgres zookeeper kafka
+          docker compose -f deploy/docker-compose.int.yml up -d postgres kafka
           for i in {1..30}; do docker exec $(docker ps -q -f ancestor=postgres:15) pg_isready -U test && break || sleep 1; done
       - name: Run E2E tests
         env:
