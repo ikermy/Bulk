@@ -56,7 +56,7 @@ func doUpload(t *testing.T, srvURL string, fileContent string, revision string) 
 	}
 	req.Header.Set("Content-Type", w.FormDataContentType())
 	req.Header.Set("Authorization", "Bearer test-token")
-	resp, err := srv.Client().Do(req)
+	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		t.Fatalf("post failed: %v", err)
 	}

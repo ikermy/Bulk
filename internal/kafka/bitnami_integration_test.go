@@ -11,7 +11,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/docker/go-connections/nat"
 	kgo "github.com/segmentio/kafka-go"
 	tc "github.com/testcontainers/testcontainers-go"
 	"github.com/testcontainers/testcontainers-go/wait"
@@ -72,7 +71,7 @@ func TestKafka_BitnamiMinimal(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to get container host: %v", err)
 	}
-	mp, err := cont.MappedPort(ctx, nat.Port("9092/tcp"))
+	mp, err := cont.MappedPort(ctx, "9092/tcp")
 	if err != nil {
 		t.Fatalf("failed to get mapped port: %v", err)
 	}

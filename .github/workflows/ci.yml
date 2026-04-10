@@ -11,7 +11,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-go@v4
+      - uses: actions/setup-go@v5
         with:
           go-version: '1.25'
       - name: Check forbidden direct HTTP calls
@@ -28,7 +28,7 @@ jobs:
           fi
           echo "No forbidden direct HTTP client usage outside internal/billing."
       - name: golangci-lint
-        uses: golangci/golangci-lint-action@v3
+        uses: golangci/golangci-lint-action@v6
 
   test:
     runs-on: ubuntu-latest
@@ -58,7 +58,7 @@ jobs:
           - 6379:6379
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-go@v4
+      - uses: actions/setup-go@v5
         with:
           go-version: '1.25'
       - name: Run tests
@@ -113,7 +113,7 @@ jobs:
           go test -tags=integration ./internal/kafka -run TestKafka_WithTestcontainers -v || echo "Testcontainers test failed or not supported, continuing to docker-compose fallback"
       - name: Start postgres for integration tests
         run: |
-          docker-compose -f deploy/docker-compose.int.yml up -d postgres
+          docker compose -f deploy/docker-compose.int.yml up -d postgres
           for i in {1..30}; do
             docker exec $(docker ps -q -f ancestor=postgres:15) pg_isready -U test && break || sleep 1
           done
@@ -128,7 +128,7 @@ jobs:
           echo "Applying migrations via migrate"
           export POSTGRES_TEST_DSN="postgres://test:test@localhost:5433/bulk_service_test?sslmode=disable"
           ./migrate -path migrations -database "$POSTGRES_TEST_DSN" up || true
-      - uses: actions/setup-go@v4
+      - uses: actions/setup-go@v5
         with:
           go-version: '1.25'
       - name: Run integration tests
@@ -136,13 +136,13 @@ jobs:
           RUN_INT_TESTS: 1
           POSTGRES_TEST_DSN: "postgres://test:test@localhost:5433/bulk_service_test?sslmode=disable"
         run: |
-          docker-compose -f deploy/docker-compose.int.yml up -d zookeeper kafka
+          docker compose -f deploy/docker-compose.int.yml up -d zookeeper kafka
           for i in {1..30}; do nc -z localhost 9092 && break || sleep 1; done
           go test -tags=integration ./internal/kafka -v || true
           go test ./internal/adapters/postgres -v
       - name: Tear down
         if: always()
-        run: docker-compose -f deploy/docker-compose.int.yml down -v
+        run: docker compose -f deploy/docker-compose.int.yml down -v
 
   e2e:
     runs-on: ubuntu-latest
@@ -150,7 +150,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Set up Go
-        uses: actions/setup-go@v4
+        uses: actions/setup-go@v5
         with:
           go-version: '1.25'
       - name: Cache Kafka image
@@ -172,7 +172,7 @@ jobs:
           fi
       - name: Start integration services
         run: |
-          docker-compose -f deploy/docker-compose.int.yml up -d postgres zookeeper kafka
+          docker compose -f deploy/docker-compose.int.yml up -d postgres zookeeper kafka
           for i in {1..30}; do docker exec $(docker ps -q -f ancestor=postgres:15) pg_isready -U test && break || sleep 1; done
       - name: Run E2E tests
         env:
@@ -181,7 +181,7 @@ jobs:
           go test -tags=integration ./... -v
       - name: Tear down E2E services
         if: always()
-        run: docker-compose -f deploy/docker-compose.int.yml down -v
+        run: docker compose -f deploy/docker-compose.int.yml down -v
 
   build:
     runs-on: ubuntu-latest

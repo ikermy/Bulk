@@ -25,7 +25,7 @@ type batchWrapper struct{ a *pg.BatchRepository }
 type jobWrapper struct{ a *pg.JobRepository }
 
 func (w *batchWrapper) Create(ctx context.Context, b *domain.Batch) error {
-	pb := &pg.Batch{ID: b.ID, UserID: b.UserID, Status: b.Status, Revision: b.Revision, FileStorageID: b.FileStorageID, TotalRows: b.TotalRows, ValidRows: b.ValidRows, ApprovedCount: b.ApprovedCount, CompletedCount: b.CompletedCount, FailedCount: b.FailedCount}
+	pb := &pg.Batch{ID: b.ID, UserID: b.UserID, Status: string(b.Status), Revision: b.Revision, FileStorageID: b.FileStorageID, TotalRows: b.TotalRows, ValidRows: b.ValidRows, ApprovedCount: b.ApprovedCount, CompletedCount: b.CompletedCount, FailedCount: b.FailedCount}
 	return w.a.Create(ctx, pb)
 }
 func (w *batchWrapper) GetByID(ctx context.Context, id string) (*domain.Batch, error) {
@@ -36,7 +36,7 @@ func (w *batchWrapper) GetByID(ctx context.Context, id string) (*domain.Batch, e
 	return ab.ToDomain(), nil
 }
 func (w *batchWrapper) Update(ctx context.Context, b *domain.Batch) error {
-	pb := &pg.Batch{ID: b.ID, UserID: b.UserID, Status: b.Status, Revision: b.Revision, FileStorageID: b.FileStorageID, TotalRows: b.TotalRows, ValidRows: b.ValidRows, ApprovedCount: b.ApprovedCount, CompletedCount: b.CompletedCount, FailedCount: b.FailedCount}
+	pb := &pg.Batch{ID: b.ID, UserID: b.UserID, Status: string(b.Status), Revision: b.Revision, FileStorageID: b.FileStorageID, TotalRows: b.TotalRows, ValidRows: b.ValidRows, ApprovedCount: b.ApprovedCount, CompletedCount: b.CompletedCount, FailedCount: b.FailedCount}
 	return w.a.Update(ctx, pb)
 }
 func (w *batchWrapper) List(ctx context.Context, filter ports.BatchFilter) ([]*domain.Batch, int, error) {
@@ -47,7 +47,7 @@ func (w *batchWrapper) AdminStats(ctx context.Context, from *time.Time, to *time
 }
 
 func (w *jobWrapper) Create(ctx context.Context, j *domain.Job) error {
-	pj := &pg.Job{ID: j.ID, BatchID: j.BatchID, RowNumber: j.RowNumber, Status: j.Status}
+	pj := &pg.Job{ID: j.ID, BatchID: j.BatchID, RowNumber: j.RowNumber, Status: string(j.Status)}
 	return w.a.Create(ctx, pj)
 }
 func (w *jobWrapper) GetByBatch(ctx context.Context, batchID string) ([]*domain.Job, error) {
@@ -90,6 +90,14 @@ func (w *jobWrapper) GetResultsByBatch(ctx context.Context, batchID string) ([]*
 		out = append(out, &ports.JobResult{JobID: r.JobID, RowNumber: r.RowNumber, BuildID: buildId, BarcodeURLs: urls, ErrorCode: errc, ErrorMessage: errmsg})
 	}
 	return out, nil
+}
+
+func (w *jobWrapper) UpdateBillingTransactionID(ctx context.Context, jobID string, txID *string) error {
+	return w.a.UpdateBillingTransactionID(ctx, jobID, txID)
+}
+
+func (w *jobWrapper) UpdateStatusWithResult(ctx context.Context, jobID string, status string, result ports.JobResult) error {
+	return w.a.UpdateStatusWithResult(ctx, jobID, status, result)
 }
 
 // Runs a full E2E flow against local Docker services (Postgres, Kafka).
@@ -181,7 +189,7 @@ func TestE2E_Flow(t *testing.T) {
 		if err != nil {
 			t.Fatalf("GetByID failed: %v", err)
 		}
-		if b.Status == string(batch.BatchStatusCompleted) || b.Status == "completed" {
+		if b.Status == batch.BatchStatusCompleted {
 			// success
 			_ = consumer.Close()
 			_ = prod.Close()

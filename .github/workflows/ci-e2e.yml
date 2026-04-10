@@ -22,8 +22,9 @@ jobs:
         with:
           fetch-depth: 0
 
+      # docker/setup-qemu-action@v3 (v2 used Node.js 20 — deprecated)
       - name: Set up QEMU
-        uses: docker/setup-qemu-action@v2
+        uses: docker/setup-qemu-action@v3
 
       - name: Cache Kafka image
         id: cache-kafka
@@ -48,10 +49,11 @@ jobs:
           mkdir -p /tmp/kafka-image || true
           docker save $KAFKA_IMAGE -o /tmp/kafka-image/kafka.tar || true
 
+      # ubuntu-latest ships Docker Compose v2 as a plugin (docker compose, not docker-compose)
       - name: Start services (docker-compose.int)
         working-directory: ${{ github.workspace }}
         run: |
-          docker-compose -f deploy/docker-compose.int.yml up -d --build
+          docker compose -f deploy/docker-compose.int.yml up -d --build
 
       - name: Wait for Postgres
         run: |
@@ -65,9 +67,7 @@ jobs:
           ATTEMPTS=20
           for i in $(seq 1 $ATTEMPTS); do
             echo "Checking kafka... attempt $i"
-            docker run --rm --network host curlimages/curl:7.88.1 curl -sS http://127.0.0.1:9092 || true
-            # rely on kafka-go testcontainers or client behavior; simple sleep loop
-            nc -z 127.0.0.1 9092 && echo kafka up && break || echo waiting && sleep 3
+            nc -z 127.0.0.1 9092 && echo "kafka up" && break || echo "waiting..." && sleep 3
             if [ "$i" -eq "$ATTEMPTS" ]; then
               echo "Kafka did not start"; exit 1
             fi
@@ -84,13 +84,12 @@ jobs:
           RETRIES=2
           for i in $(seq 1 $RETRIES); do
             echo "Running go test (integration tag) attempt $i"
-            go test -v -tags=integration ./... || true
-            RC=$?
+            go test -v -tags=integration ./... && RC=0 || RC=$?
             if [ $RC -eq 0 ]; then
               echo "Integration tests passed"; break
             fi
             echo "Integration tests failed (exit $RC), collecting logs and retrying..."
-            docker-compose -f deploy/docker-compose.int.yml logs --no-color > e2e-dc-logs.txt || true
+            docker compose -f deploy/docker-compose.int.yml logs --no-color > e2e-dc-logs.txt || true
             docker ps --no-trunc --format '{{.ID}} {{.Image}} {{.Names}}' > e2e-docker-ps.txt || true
             sleep 5
             if [ $i -eq $RETRIES ]; then
@@ -107,21 +106,24 @@ jobs:
           path: |
             e2e-dc-logs.txt
             e2e-docker-ps.txt
+          if-no-files-found: ignore
+
       - name: Collect app /metrics (on failure)
         if: failure()
         run: |
           echo "Collecting /metrics from local app (best-effort)"
           curl -sS http://127.0.0.1:8080/metrics -o e2e-app-metrics.txt || true
         continue-on-error: true
+
       - name: Upload metrics artifact
         if: failure()
         uses: actions/upload-artifact@v4
         with:
           name: e2e-metrics
           path: e2e-app-metrics.txt
+          if-no-files-found: ignore
 
       - name: Tear down
         if: always()
         run: |
-          docker-compose -f deploy/docker-compose.int.yml down --volumes
-
+          docker compose -f deploy/docker-compose.int.yml down --volumes

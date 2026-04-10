@@ -27,7 +27,6 @@ import (
 	handlers "github.com/ikermy/Bulk/internal/transport/http/handlers"
 	svc "github.com/ikermy/Bulk/internal/usecase/bulk"
 
-	"github.com/docker/go-connections/nat"
 	kgo "github.com/segmentio/kafka-go"
 )
 
@@ -251,14 +250,14 @@ func TestE2E_FullFlow(t *testing.T) {
 					useKafka = false
 				} else {
 					defer kafkaCont.Terminate(ctx)
-					host, _ := kafkaCont.Host(ctx)
-					mp, _ := kafkaCont.MappedPort(ctx, nat.Port("9092/tcp"))
-					kafkaBroker = host + ":" + mp.Port()
-					t.Logf("kafka broker: %s", kafkaBroker)
+				host, _ := kafkaCont.Host(ctx)
+				mp, _ := kafkaCont.MappedPort(ctx, "9092/tcp")
+				kafkaBroker = host + ":" + mp.Port()
+				t.Logf("kafka broker: %s", kafkaBroker)
 
-					// create topic
-					dialCtx, dialCancel := context.WithTimeout(ctx, 30*time.Second)
-					defer dialCancel()
+				// create topic
+				dialCtx, dialCancel := context.WithTimeout(ctx, 30*time.Second)
+				defer dialCancel()
 					conn, err := kgo.DialContext(dialCtx, "tcp", kafkaBroker)
 					if err == nil {
 						topic := os.Getenv("KAFKA_TOPIC_BULK_JOB")
@@ -307,9 +306,9 @@ func TestE2E_FullFlow(t *testing.T) {
 			} else {
 				defer kafkaCont.Terminate(ctx)
 				// dump logs on failure later by collecting from kafkaCont
-				host, _ := kafkaCont.Host(ctx)
-				mp, _ := kafkaCont.MappedPort(ctx, nat.Port("9092/tcp"))
-				kafkaBroker = host + ":" + mp.Port()
+			host, _ := kafkaCont.Host(ctx)
+			mp, _ := kafkaCont.MappedPort(ctx, "9092/tcp")
+			kafkaBroker = host + ":" + mp.Port()
 				t.Logf("kafka broker: %s", kafkaBroker)
 
 				// create topic with retries similar to bitnami test
