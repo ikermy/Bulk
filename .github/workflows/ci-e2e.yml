@@ -12,8 +12,8 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 90
     env:
-      KAFKA_IMAGE: bitnami/kafka:3
-      ZOOKEEPER_IMAGE: bitnami/zookeeper:3
+      KAFKA_IMAGE: bitnami/kafka:3.5.1
+      ZOOKEEPER_IMAGE: bitnami/zookeeper:3.9
       POSTGRES_IMAGE: postgres:15
       MINIO_IMAGE: minio/minio:latest
     steps:
