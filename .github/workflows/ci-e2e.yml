@@ -21,6 +21,12 @@ jobs:
         with:
           fetch-depth: 0
 
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.25'
+          cache: true
+
       # docker/setup-qemu-action@v3 (v2 used Node.js 20 — deprecated)
       - name: Set up QEMU
         uses: docker/setup-qemu-action@v3
@@ -55,26 +61,26 @@ jobs:
 
       - name: Wait for Postgres
         run: |
-          for i in {1..30}; do
-            docker run --rm --network host alpine sh -c "apk add --no-cache postgresql-client >/dev/null 2>&1; pg_isready -h 127.0.0.1 -p 5433 && exit 0" && break || sleep 2
+          for i in $(seq 1 30); do
+            docker exec deploy-postgres-1 pg_isready -U test && echo "Postgres ready" && break || sleep 2
           done
 
       - name: Apply DB migrations
         run: |
-          POSTGRES_TEST_DSN="postgres://test:test@127.0.0.1:5433/bulk_service_test?sslmode=disable"
-          docker run --rm --network host -e PGPASSWORD=test postgres:15 \
-            psql -h 127.0.0.1 -p 5433 -U test -d bulk_service_test \
-            -c "$(cat migrations/001_init.sql)" || true
+          docker cp migrations/001_init.sql deploy-postgres-1:/tmp/init.sql
+          docker exec deploy-postgres-1 psql -U test -d bulk_service_test -f /tmp/init.sql || true
 
       - name: Wait for Kafka (with retries)
         run: |
           set -e
-          ATTEMPTS=20
+          ATTEMPTS=30
           for i in $(seq 1 $ATTEMPTS); do
             echo "Checking kafka... attempt $i"
-            nc -z 127.0.0.1 9092 && echo "kafka up" && break || echo "waiting..." && sleep 3
+            docker exec deploy-kafka-1 /opt/kafka/bin/kafka-broker-api-versions.sh \
+              --bootstrap-server localhost:9092 2>/dev/null && echo "Kafka ready" && break \
+              || echo "waiting..." && sleep 3
             if [ "$i" -eq "$ATTEMPTS" ]; then
-              echo "Kafka did not start"; exit 1
+              echo "Kafka did not start in time"; docker logs deploy-kafka-1; exit 1
             fi
           done
 
@@ -89,7 +95,7 @@ jobs:
           RETRIES=2
           for i in $(seq 1 $RETRIES); do
             echo "Running go test (integration tag) attempt $i"
-            go test -v -tags=integration ./... && RC=0 || RC=$?
+            go test -v -tags=integration -timeout=300s ./... && RC=0 || RC=$?
             if [ $RC -eq 0 ]; then
               echo "Integration tests passed"; break
             fi

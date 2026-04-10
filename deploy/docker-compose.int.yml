@@ -13,7 +13,7 @@ services:
       timeout: 5s
       retries: 5
     volumes:
-      - ./db-data-test:/var/lib/postgresql/data
+      - pg-data-test:/var/lib/postgresql/data
 
   kafka:
     image: ${KAFKA_IMAGE:-apache/kafka:3.7.0}
@@ -37,3 +37,6 @@ services:
       timeout: 10s
       retries: 12
       start_period: 20s
+
+volumes:
+  pg-data-test:
