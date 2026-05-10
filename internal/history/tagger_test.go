@@ -56,10 +56,10 @@ func TestTagBulkID_Publishes(t *testing.T) {
 		capturedMsg = msg
 		return nil
 	}
-	tg := NewTagger(mp, "trans-history.log")
+	tg := NewTagger(mp, "transaction-history")
 	urls := map[string]string{"row1": "https://cdn/bar1.png"}
 	require.NoError(t, tg.TagBulkID(context.Background(), "batch-1", "job-1", urls))
-	require.Equal(t, "trans-history.log", capturedTopic)
+	require.Equal(t, "transaction-history", capturedTopic)
 
 	m, ok := capturedMsg.(map[string]any)
 	require.True(t, ok)
@@ -76,8 +76,7 @@ func TestTagBulkID_ReturnsError(t *testing.T) {
 	mp.PublishFn = func(ctx context.Context, topic string, key []byte, msg any) error {
 		return wantErr
 	}
-	tg := NewTagger(mp, "trans-history.log")
+	tg := NewTagger(mp, "transaction-history")
 	err := tg.TagBulkID(context.Background(), "b1", "j1", nil)
 	require.ErrorIs(t, err, wantErr)
 }
-

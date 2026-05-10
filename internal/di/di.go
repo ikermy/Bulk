@@ -77,12 +77,10 @@ func NewDeps(cfg *cfg.Config) (*Deps, error) {
 	billingClient := billing.NewBFFBillingClient(cfg.BFF.URL, cfg.BFF.Timeout, cfg.BFF.ServiceToken)
 
 	producer := kafka.NewProducer(cfg.Kafka.Brokers)
-	// history tagger - publish to trans-history.log topic per TZ
-	histTopic := os.Getenv("KAFKA_TOPIC_TRANS_HISTORY")
-	if histTopic == "" {
-		histTopic = "trans-history.log"
-	}
-	hist := history.NewTagger(producer, histTopic)
+	// history tagger — публикует события в топик TransHistory Service.
+	// Имя топика берётся из конфига (KAFKA_TOPIC_TRANS_HISTORY, дефолт "transaction-history"),
+	// что соответствует имени, которое слушает TransHistory Service (grpc_kafka_fixes.md §2.2).
+	hist := history.NewTagger(producer, cfg.Kafka.TransHistoryTopic)
 	// initialize logger early so it can be passed to components
 	logger := logging.NewLogger(cfg)
 	// create batch manager early so consumer handler can notify batch state changes

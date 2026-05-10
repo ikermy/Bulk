@@ -75,13 +75,14 @@ docker-compose -f deploy/docker-compose.yml up -d
 
 ### Kafka
 
-| Переменная                 | По умолчанию    | Описание                          |
-|----------------------------|-----------------|-----------------------------------|
-| `KAFKA_BROKERS`            | `localhost:9092`| Адреса брокеров (через запятую)   |
-| `KAFKA_TOPIC_BULK_JOB`     | `bulk.job`      | Топик публикации заданий          |
-| `KAFKA_TOPIC_BULK_RESULT`  | `bulk.result`   | Топик результатов обработки       |
-| `KAFKA_TOPIC_BULK_STATUS`  | `bulk.status`   | Топик статусов батчей             |
-| `KAFKA_CONSUMER_GROUP`     | `bulk-service`  | Consumer group                    |
+| Переменная                       | По умолчанию       | Описание                                                    |
+|----------------------------------|--------------------|-------------------------------------------------------------|
+| `KAFKA_BROKERS`                  | `localhost:9092`   | Адреса брокеров (через запятую)                             |
+| `KAFKA_TOPIC_BULK_JOB`           | `bulk.job`         | Топик публикации заданий                                    |
+| `KAFKA_TOPIC_BULK_RESULT`        | `bulk.result`      | Топик результатов обработки                                 |
+| `KAFKA_TOPIC_BULK_STATUS`        | `bulk.status`      | Топик статусов батчей                                       |
+| `KAFKA_CONSUMER_GROUP`           | `bulk-service`     | Consumer group                                              |
+| `KAFKA_TOPIC_TRANS_HISTORY`      | `transaction-history` | Топик событий истории (TransHistory Service consumer)    |
 
 ### BFF (биллинговая интеграция)
 

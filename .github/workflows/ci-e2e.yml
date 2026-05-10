@@ -107,7 +107,7 @@ jobs:
               echo "Integration tests failed after retries"
               exit $RC
             fi
-          done
+          done 
 
       - name: Archive logs
         if: failure()

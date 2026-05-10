@@ -48,6 +48,9 @@ type Config struct {
 		// BulkStatusTopic — topic for publishing batch status updates (TZ §8.1)
 		BulkStatusTopic string `env:"KAFKA_TOPIC_BULK_STATUS" envDefault:"bulk.status"`
 		ConsumerGroup   string `env:"KAFKA_CONSUMER_GROUP" envDefault:"bulk-service"`
+		// TransHistoryTopic — топик для событий истории транзакций (grpc_kafka_fixes.md §2.2).
+		// Имя совпадает с тем, что слушает TransHistory Service ("transaction-history").
+		TransHistoryTopic string `env:"KAFKA_TOPIC_TRANS_HISTORY" envDefault:"transaction-history"`
 	}
 
 	Database struct {
@@ -158,6 +161,11 @@ func LoadConfigFromEnv() (*Config, error) {
 	// Kafka
 	if v := os.Getenv("KAFKA_BROKERS"); v != "" {
 		cfg.Kafka.Brokers = v
+	}
+	if v := os.Getenv("KAFKA_TOPIC_TRANS_HISTORY"); v != "" {
+		cfg.Kafka.TransHistoryTopic = v
+	} else {
+		cfg.Kafka.TransHistoryTopic = "transaction-history"
 	}
 
 	// Database
